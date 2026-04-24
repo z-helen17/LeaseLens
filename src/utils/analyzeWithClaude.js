@@ -20,7 +20,8 @@ bias: number 1-5, or the string 'x'
 note: string (explanation of why this clause leans this way, referencing jurisdiction standards. No style comments.)
 change: string or null (precise word-level change needed — what to replace with what. No style suggestions. Null for neutral clauses.)
 genClause: string or null (full drafted replacement clause text using the agreement's own definitions and language, only when the change requires a new mechanism. Null otherwise.)
-lenderFlag: boolean (true if this clause is relevant to a landlord's lender)`;
+lenderFlag: boolean (true if this clause is relevant to a landlord's lender)
+verbatimExtract: string — exactly 10-15 consecutive words copied verbatim from the body text of this clause (not the heading, not paraphrased — exact words as they appear in the document, used to locate the clause in the source file)`;
 
 const SYSTEM_PROMPT_CHUNK = `You are a commercial real estate lawyer analysing lease agreement clauses for bias. You will be given a portion of a lease. Analyse ONLY the clauses present in this portion and return your results immediately — do NOT wait for additional parts, do NOT ask for more context, do NOT say the document is incomplete.
 
@@ -35,7 +36,8 @@ bias: number 1-5, or the string 'x'
 note: string (explanation of why this clause leans this way, referencing jurisdiction standards. No style comments.)
 change: string or null (precise word-level change needed — what to replace with what. No style suggestions. Null for neutral clauses.)
 genClause: string or null (full drafted replacement clause text using the agreement's own definitions and language, only when the change requires a new mechanism. Null otherwise.)
-lenderFlag: boolean (true if this clause is relevant to a landlord's lender)`;
+lenderFlag: boolean (true if this clause is relevant to a landlord's lender)
+verbatimExtract: string — exactly 10-15 consecutive words copied verbatim from the body text of this clause (not the heading, not paraphrased — exact words as they appear in the document, used to locate the clause in the source file)`;
 
 const CHUNK_SIZE = 30000;
 

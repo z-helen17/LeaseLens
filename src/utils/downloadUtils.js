@@ -135,64 +135,130 @@ function paraTextFromXml(paraXml) {
     .trim();
 }
 
-// Finds the <w:p> in xml whose concatenated text matches clauseName, then
-// wraps all its runs with commentRangeStart/End and a commentReference run.
-// Returns modified xml on success, original xml on no match (and logs a warning).
-function injectCommentMarkers(xml, clauseName, commentId) {
+// Finds the <w:p> in xml that contains verbatimExtract (preferred) or matches
+// clauseName (fallback), then wraps its runs with commentRangeStart/End and a
+// commentReference run.
+// Returns { xml: string, matched: boolean }.
+function injectCommentMarkers(xml, clauseName, commentId, verbatimExtract) {
   const startTag = `<w:commentRangeStart w:id="${commentId}"/>`;
   const endTag   = `<w:commentRangeEnd w:id="${commentId}"/>`;
   const refRun   =
     `<w:r><w:rPr><w:rStyle w:val="CommentReference"/></w:rPr>` +
     `<w:commentReference w:id="${commentId}"/></w:r>`;
 
+  function tryInjectAtPara(paraMatch) {
+    const para = paraMatch[0];
+    const pPrEnd     = para.indexOf('</w:pPr>');
+    const searchFrom = pPrEnd !== -1 ? pPrEnd + 8 : 0;
+    const runMatch   = /<w:r[\s>\/]/.exec(para.slice(searchFrom));
+    if (!runMatch) return null;
+    const firstRunStart = searchFrom + runMatch.index;
+    const lastRunEnd    = para.lastIndexOf('</w:r>');
+    if (lastRunEnd === -1) return null;
+    const afterLastRun  = lastRunEnd + 6;
+    const newPara =
+      para.slice(0, firstRunStart) + startTag +
+      para.slice(firstRunStart, afterLastRun) + endTag + refRun +
+      para.slice(afterLastRun);
+    return xml.slice(0, paraMatch.index) + newPara + xml.slice(paraMatch.index + paraMatch[0].length);
+  }
+
+  // First pass: verbatim extract anchor
+  if (verbatimExtract) {
+    const normExtract = verbatimExtract.replace(/\s+/g, ' ').trim().toLowerCase();
+    const paraRegex = /<w:p[\s>][\s\S]*?<\/w:p>/g;
+    let m;
+    while ((m = paraRegex.exec(xml)) !== null) {
+      const paraText = paraTextFromXml(m[0]);
+      if (!paraText) continue;
+      if (!paraText.replace(/\s+/g, ' ').trim().toLowerCase().includes(normExtract)) continue;
+      const newXml = tryInjectAtPara(m);
+      if (newXml) {
+        console.log(`[LeaseLens] ✓ comment #${commentId} anchored "${clauseName}" via verbatimExtract`);
+        return { xml: newXml, matched: true };
+      }
+    }
+  }
+
+  // Second pass: clause name fallback
   const paraRegex = /<w:p[\s>][\s\S]*?<\/w:p>/g;
   let m;
   let parasChecked = 0;
-
   while ((m = paraRegex.exec(xml)) !== null) {
     const paraText = paraTextFromXml(m[0]);
     if (!paraText) continue;
     parasChecked++;
-
     const reason = whyClauseMatchesPara(clauseName, paraText);
     if (!reason) continue;
-
     console.log(`[LeaseLens] ✓ comment #${commentId} matched "${clauseName}" → "${paraText.slice(0, 100)}" (${reason})`);
-
-    const para = m[0];
-
-    // Start search for runs after </w:pPr> if present
-    const pPrEnd      = para.indexOf('</w:pPr>');
-    const searchFrom  = pPrEnd !== -1 ? pPrEnd + 8 : 0;
-
-    // Match first real run (<w:r> or <w:r >) — excludes <w:rPr>, <w:rStyle> etc.
-    const runMatch = /<w:r[\s>\/]/.exec(para.slice(searchFrom));
-    if (!runMatch) {
-      console.warn(`[LeaseLens] ✗ "${clauseName}": matched para has no runs, skipping`);
-      continue;
-    }
-    const firstRunStart = searchFrom + runMatch.index;
-
-    const lastRunEnd = para.lastIndexOf('</w:r>');
-    if (lastRunEnd === -1) {
-      console.warn(`[LeaseLens] ✗ "${clauseName}": matched para has no closing </w:r>, skipping`);
-      continue;
-    }
-    const afterLastRun = lastRunEnd + 6; // '</w:r>'.length === 6
-
-    const newPara =
-      para.slice(0, firstRunStart) +
-      startTag +
-      para.slice(firstRunStart, afterLastRun) +
-      endTag +
-      refRun +
-      para.slice(afterLastRun);
-
-    return xml.slice(0, m.index) + newPara + xml.slice(m.index + m[0].length);
+    const newXml = tryInjectAtPara(m);
+    if (newXml) return { xml: newXml, matched: true };
   }
 
   console.warn(`[LeaseLens] ✗ "${clauseName}": no matching paragraph found (checked ${parasChecked} non-empty paras)`);
-  return xml;
+  return { xml, matched: false };
+}
+
+// ── Unmatched clauses DOCX ────────────────────────────────────────────────────
+
+async function downloadUnmatchedDocx(unmatchedClauses) {
+  const children = [
+    new Paragraph({
+      children: [new TextRun({ text: 'LeaseLens — Unmatched Comments', bold: true, size: 36, color: '1B2E4B' })],
+      spacing: { after: 200 },
+    }),
+    new Paragraph({
+      children: [new TextRun({
+        text: 'The following clauses could not be automatically placed in the annotated document. Please review them alongside the annotated lease.',
+        size: 20,
+        color: '6B7280',
+      })],
+      spacing: { after: 400 },
+    }),
+  ];
+
+  for (const clause of unmatchedClauses) {
+    const biasLabel = clause.bias === 'x'
+      ? 'Unclear / Drafting Error'
+      : `Bias ${clause.bias} — ${BIAS_LABELS[clause.bias]}`;
+    const scoreStr = clause.score != null ? `  |  Score: ${clause.score}/100` : '';
+
+    children.push(
+      new Paragraph({
+        children: [new TextRun({ text: clause.name || '', bold: true, size: 24, color: '1B2E4B' })],
+        heading: HeadingLevel.HEADING_3,
+        spacing: { before: 400, after: 80 },
+        border: {
+          left: { style: BorderStyle.THICK, size: 6, color: biasHexNoHash(clause.bias) },
+        },
+      }),
+      new Paragraph({
+        children: [new TextRun({ text: biasLabel + scoreStr, size: 18, color: biasHexNoHash(clause.bias) })],
+        spacing: { after: 120 },
+      }),
+      new Paragraph({
+        children: [new TextRun({ text: clause.note || '', size: 20, color: '374151' })],
+        spacing: { after: 160 },
+      }),
+    );
+
+    if (clause.change) {
+      children.push(
+        new Paragraph({
+          children: [
+            new TextRun({ text: 'Suggested Change: ', bold: true, size: 20, color: '92400E' }),
+            new TextRun({ text: clause.change, size: 20, color: '78350F' }),
+          ],
+          spacing: { after: 200 },
+          shading: { fill: 'FEF3C7' },
+        }),
+      );
+    }
+  }
+
+  const docFile = new Document({ sections: [{ properties: {}, children }] });
+  const blob = await Packer.toBlob(docFile);
+  saveBlob(blob, 'LeaseLens-Unmatched-Comments.docx');
 }
 
 // ── Annotated DOCX (DOCX upload, options 2 / 3 / 4) ─────────────────────────
@@ -215,32 +281,36 @@ async function downloadAnnotatedDocx(filteredClauses, file) {
     console.log('[LeaseLens] clauses with changes:', clausesWithChanges.length);
 
     const commentElements = [];
+    const unmatchedClauses = [];
     let injected = 0;
 
     clausesWithChanges.forEach((clause, idx) => {
       const commentId = idBase + idx;
-      const biasLabel = clause.bias === 'x'
-        ? 'Unclear/Error'
-        : `Bias ${clause.bias} — ${BIAS_LABELS[clause.bias]}`;
-      const scoreStr = clause.score != null ? ` | Score: ${clause.score}/100` : '';
+      const result = injectCommentMarkers(docXml, clause.name, commentId, clause.verbatimExtract);
 
-      commentElements.push(
-        `<w:comment w:id="${commentId}" w:author="LeaseLens" w:date="${new Date().toISOString()}" w:initials="LL">` +
-        `<w:p><w:r><w:t xml:space="preserve">${xmlEscape(clause.name)}</w:t></w:r></w:p>` +
-        `<w:p><w:r><w:t xml:space="preserve">${xmlEscape(biasLabel + scoreStr)}</w:t></w:r></w:p>` +
-        `<w:p><w:r><w:t xml:space="preserve">Analysis: ${xmlEscape(clause.note)}</w:t></w:r></w:p>` +
-        `<w:p><w:r><w:t xml:space="preserve">Suggested Change: ${xmlEscape(clause.change)}</w:t></w:r></w:p>` +
-        `</w:comment>`
-      );
-
-      const before = docXml;
-      docXml = injectCommentMarkers(docXml, clause.name, commentId);
-      if (docXml !== before) injected++;
+      if (result.matched) {
+        docXml = result.xml;
+        injected++;
+        const biasLabel = clause.bias === 'x'
+          ? 'Unclear/Error'
+          : `Bias ${clause.bias} — ${BIAS_LABELS[clause.bias]}`;
+        const scoreStr = clause.score != null ? ` | Score: ${clause.score}/100` : '';
+        commentElements.push(
+          `<w:comment w:id="${commentId}" w:author="LeaseLens" w:date="${new Date().toISOString()}" w:initials="LL">` +
+          `<w:p><w:r><w:t xml:space="preserve">${xmlEscape(clause.name)}</w:t></w:r></w:p>` +
+          `<w:p><w:r><w:t xml:space="preserve">${xmlEscape(biasLabel + scoreStr)}</w:t></w:r></w:p>` +
+          `<w:p><w:r><w:t xml:space="preserve">Analysis: ${xmlEscape(clause.note)}</w:t></w:r></w:p>` +
+          `<w:p><w:r><w:t xml:space="preserve">Suggested Change: ${xmlEscape(clause.change)}</w:t></w:r></w:p>` +
+          `</w:comment>`
+        );
+      } else {
+        unmatchedClauses.push(clause);
+      }
     });
 
     console.log(`[LeaseLens] comment injection: ${injected}/${clausesWithChanges.length} clauses matched`);
 
-    // Build or append to comments.xml
+    // Build or append to comments.xml (only if at least one comment was injected)
     const existingCommentsFile = zip.file('word/comments.xml');
     if (existingCommentsFile) {
       const existing = existingCommentsFile.asText();
@@ -290,6 +360,15 @@ async function downloadAnnotatedDocx(filteredClauses, file) {
 
     saveBlob(blob, `${baseName(file.name)}_leaselens_annotated.docx`);
     console.log('[LeaseLens] download triggered, matched', commentElements.length, 'of', clausesWithChanges.length, 'clauses');
+
+    if (unmatchedClauses.length > 0) {
+      await downloadUnmatchedDocx(unmatchedClauses);
+      alert(
+        `${unmatchedClauses.length} clause(s) could not be placed directly in the document. ` +
+        `They have been saved in a separate file: LeaseLens-Unmatched-Comments.docx — ` +
+        `please review that file alongside the annotated lease.`
+      );
+    }
   } catch (err) {
     console.error('[LeaseLens] downloadAnnotatedDocx ERROR:', err);
     throw err;
