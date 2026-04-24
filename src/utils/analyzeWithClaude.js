@@ -1,3 +1,10 @@
+import Anthropic from '@anthropic-ai/sdk';
+
+const client = new Anthropic({
+  apiKey: import.meta.env.VITE_ANTHROPIC_API_KEY,
+  dangerouslyAllowBrowser: true,
+});
+
 const SYSTEM_PROMPT_FULL = `You are a commercial real estate lawyer analysing a lease agreement for clause bias. You will be given the full text of a lease. Do the following in order:
 
 PASS 1: Scan the entire document for any explicit jurisdiction or governing law clause. Note the jurisdiction found, or use the location provided by the user if none found.
@@ -100,16 +107,12 @@ function parseResponse(raw) {
 }
 
 async function callAnalyzeAPI(system, messages) {
-  const res = await fetch('/api/analyze', {
-    method: 'POST',
-    headers: { 'Content-Type': 'application/json' },
-    body: JSON.stringify({ model: 'claude-sonnet-4-6', max_tokens: 16000, system, messages }),
+  return client.messages.create({
+    model: 'claude-sonnet-4-6',
+    max_tokens: 16000,
+    system,
+    messages,
   });
-  if (!res.ok) {
-    const err = await res.json().catch(() => ({ error: res.statusText }));
-    throw new Error(err.error || 'Server error');
-  }
-  return res.json();
 }
 
 // onProgress(currentChunkNumber, totalChunks) — called before each API call (1-indexed)
