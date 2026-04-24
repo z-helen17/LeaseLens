@@ -120,24 +120,62 @@ function xmlEscape(str) {
     .replace(/'/g, '&apos;');
 }
 
-// Extract visible text from a <w:p> XML node, decoding entities.
-function paraTextFromXml(paraXml) {
-  return paraXml
-    .replace(/<[^>]+>/g, '')
+// Decode XML character entities in a text string.
+function decodeXmlEntities(str) {
+  return str
     .replace(/&amp;/g,  '&')
     .replace(/&lt;/g,   '<')
     .replace(/&gt;/g,   '>')
     .replace(/&quot;/g, '"')
     .replace(/&apos;/g, "'")
     .replace(/&#x[\dA-Fa-f]+;/g, ' ')
-    .replace(/&#\d+;/g, ' ')
-    .replace(/\s+/g, ' ')
-    .trim();
+    .replace(/&#\d+;/g, ' ');
 }
 
-// Finds the <w:p> in xml that contains verbatimExtract (preferred) or matches
-// clauseName (fallback), then wraps its runs with commentRangeStart/End and a
-// commentReference run.
+// Build a map of every <w:p> in the document XML.
+// Each entry: { cleanText, originalXml, start, end }
+// cleanText is built by concatenating all <w:t> text nodes within the paragraph,
+// which correctly handles text split across multiple runs without losing spaces.
+function buildParaMap(xml) {
+  const paras = [];
+  const paraRegex = /<w:p[\s>][\s\S]*?<\/w:p>/g;
+  let m;
+  while ((m = paraRegex.exec(xml)) !== null) {
+    const paraXml = m[0];
+    const tRegex = /<w:t(?:\s[^>]*)?>([^<]*)<\/w:t>/g;
+    let tm;
+    const parts = [];
+    while ((tm = tRegex.exec(paraXml)) !== null) {
+      parts.push(decodeXmlEntities(tm[1]));
+    }
+    const cleanText = parts.join('').replace(/\s+/g, ' ').trim();
+    if (!cleanText) continue;
+    paras.push({ cleanText, originalXml: paraXml, start: m.index, end: m.index + paraXml.length });
+  }
+  return paras;
+}
+
+// Inject comment markers into the paragraph described by `para` (a buildParaMap entry)
+// and return the updated full document XML. Returns null if the paragraph has no runs.
+function injectIntoParaEntry(xml, para, startTag, endTag, refRun) {
+  const p = para.originalXml;
+  const pPrEnd     = p.indexOf('</w:pPr>');
+  const searchFrom = pPrEnd !== -1 ? pPrEnd + 8 : 0;
+  const runMatch   = /<w:r[\s>\/]/.exec(p.slice(searchFrom));
+  if (!runMatch) return null;
+  const firstRunStart = searchFrom + runMatch.index;
+  const lastRunEnd    = p.lastIndexOf('</w:r>');
+  if (lastRunEnd === -1) return null;
+  const afterLastRun  = lastRunEnd + 6;
+  const newPara =
+    p.slice(0, firstRunStart) + startTag +
+    p.slice(firstRunStart, afterLastRun) + endTag + refRun +
+    p.slice(afterLastRun);
+  return xml.slice(0, para.start) + newPara + xml.slice(para.end);
+}
+
+// Search the pre-built paragraph map for verbatimExtract (preferred) then clauseName
+// (fallback). Injects comment markers at the matched paragraph position.
 // Returns { xml: string, matched: boolean }.
 function injectCommentMarkers(xml, clauseName, commentId, verbatimExtract) {
   const startTag = `<w:commentRangeStart w:id="${commentId}"/>`;
@@ -146,33 +184,14 @@ function injectCommentMarkers(xml, clauseName, commentId, verbatimExtract) {
     `<w:r><w:rPr><w:rStyle w:val="CommentReference"/></w:rPr>` +
     `<w:commentReference w:id="${commentId}"/></w:r>`;
 
-  function tryInjectAtPara(paraMatch) {
-    const para = paraMatch[0];
-    const pPrEnd     = para.indexOf('</w:pPr>');
-    const searchFrom = pPrEnd !== -1 ? pPrEnd + 8 : 0;
-    const runMatch   = /<w:r[\s>\/]/.exec(para.slice(searchFrom));
-    if (!runMatch) return null;
-    const firstRunStart = searchFrom + runMatch.index;
-    const lastRunEnd    = para.lastIndexOf('</w:r>');
-    if (lastRunEnd === -1) return null;
-    const afterLastRun  = lastRunEnd + 6;
-    const newPara =
-      para.slice(0, firstRunStart) + startTag +
-      para.slice(firstRunStart, afterLastRun) + endTag + refRun +
-      para.slice(afterLastRun);
-    return xml.slice(0, paraMatch.index) + newPara + xml.slice(paraMatch.index + paraMatch[0].length);
-  }
+  const paras = buildParaMap(xml);
 
-  // First pass: verbatim extract anchor
+  // First pass: verbatim extract — substring match against clean paragraph text
   if (verbatimExtract) {
     const normExtract = verbatimExtract.replace(/\s+/g, ' ').trim().toLowerCase();
-    const paraRegex = /<w:p[\s>][\s\S]*?<\/w:p>/g;
-    let m;
-    while ((m = paraRegex.exec(xml)) !== null) {
-      const paraText = paraTextFromXml(m[0]);
-      if (!paraText) continue;
-      if (!paraText.replace(/\s+/g, ' ').trim().toLowerCase().includes(normExtract)) continue;
-      const newXml = tryInjectAtPara(m);
+    for (const para of paras) {
+      if (!para.cleanText.toLowerCase().includes(normExtract)) continue;
+      const newXml = injectIntoParaEntry(xml, para, startTag, endTag, refRun);
       if (newXml) {
         console.log(`[LeaseLens] ✓ comment #${commentId} anchored "${clauseName}" via verbatimExtract`);
         return { xml: newXml, matched: true };
@@ -180,22 +199,16 @@ function injectCommentMarkers(xml, clauseName, commentId, verbatimExtract) {
     }
   }
 
-  // Second pass: clause name fallback
-  const paraRegex = /<w:p[\s>][\s\S]*?<\/w:p>/g;
-  let m;
-  let parasChecked = 0;
-  while ((m = paraRegex.exec(xml)) !== null) {
-    const paraText = paraTextFromXml(m[0]);
-    if (!paraText) continue;
-    parasChecked++;
-    const reason = whyClauseMatchesPara(clauseName, paraText);
+  // Second pass: clause name heuristic fallback
+  for (const para of paras) {
+    const reason = whyClauseMatchesPara(clauseName, para.cleanText);
     if (!reason) continue;
-    console.log(`[LeaseLens] ✓ comment #${commentId} matched "${clauseName}" → "${paraText.slice(0, 100)}" (${reason})`);
-    const newXml = tryInjectAtPara(m);
+    console.log(`[LeaseLens] ✓ comment #${commentId} matched "${clauseName}" → "${para.cleanText.slice(0, 100)}" (${reason})`);
+    const newXml = injectIntoParaEntry(xml, para, startTag, endTag, refRun);
     if (newXml) return { xml: newXml, matched: true };
   }
 
-  console.warn(`[LeaseLens] ✗ "${clauseName}": no matching paragraph found (checked ${parasChecked} non-empty paras)`);
+  console.warn(`[LeaseLens] ✗ "${clauseName}": no matching paragraph found (checked ${paras.length} non-empty paras)`);
   return { xml, matched: false };
 }
 
