@@ -133,9 +133,10 @@ function decodeXmlEntities(str) {
 }
 
 // Build a map of every <w:p> in the document XML.
-// Each entry: { cleanText, originalXml, start, end }
+// Each entry: { cleanText, originalXml, start, end, paraIdx }
 // cleanText is built by concatenating all <w:t> text nodes within the paragraph,
 // which correctly handles text split across multiple runs without losing spaces.
+// paraIdx is the 0-based position among all non-empty paragraphs in document order.
 function buildParaMap(xml) {
   const paras = [];
   const paraRegex = /<w:p[\s>][\s\S]*?<\/w:p>/g;
@@ -150,9 +151,16 @@ function buildParaMap(xml) {
     }
     const cleanText = parts.join('').replace(/\s+/g, ' ').trim();
     if (!cleanText) continue;
-    paras.push({ cleanText, originalXml: paraXml, start: m.index, end: m.index + paraXml.length });
+    paras.push({ cleanText, originalXml: paraXml, start: m.index, end: m.index + paraXml.length, paraIdx: paras.length });
   }
   return paras;
+}
+
+// Returns true only for paragraphs long enough to be clause body text.
+// Paragraphs shorter than 50 chars or fewer than 20 words are likely headings,
+// TOC entries, or cover-page lines and must not receive comment anchors.
+function isBodyParagraph(cleanText) {
+  return cleanText.length >= 50 && cleanText.split(/\s+/).length >= 20;
 }
 
 // Inject comment markers into the paragraph described by `para` (a buildParaMap entry)
@@ -175,9 +183,10 @@ function injectIntoParaEntry(xml, para, startTag, endTag, refRun) {
 }
 
 // Search the pre-built paragraph map for verbatimExtract (strategy 1) then
-// clauseName heuristics (strategy 2). If neither finds a paragraph with
-// injectable runs, returns matched:false — no fallback anchor ever fires.
-// debugIdx: pass the 0-based clause index for the first 3 clauses; omit otherwise.
+// clauseName heuristics (strategy 2). Both strategies skip paragraphs that fail
+// the isBodyParagraph check — headings, TOC lines, and cover-page text are excluded.
+// If neither strategy finds a qualifying paragraph, returns matched:false with no anchor.
+// debugIdx: 0-based clause index; pass for first 5 clauses to enable diagnostic output.
 // Returns { xml: string, matched: boolean }.
 function injectCommentMarkers(xml, clauseName, commentId, verbatimExtract, debugIdx) {
   const startTag = `<w:commentRangeStart w:id="${commentId}"/>`;
@@ -188,65 +197,65 @@ function injectCommentMarkers(xml, clauseName, commentId, verbatimExtract, debug
 
   const paras = buildParaMap(xml);
 
-  // ── Diagnostic logging ──────────────────────────────────────────────────────
+  // ── Diagnostic: para map snapshot (first clause only) ──────────────────────
   if (debugIdx === 0) {
-    console.log(`[LeaseLens] Para map: ${paras.length} non-empty paragraphs. First 5 entries:`);
-    paras.slice(0, 5).forEach((p, i) =>
-      console.log(`  [${i}] start=${p.start} | "${p.cleanText.slice(0, 150)}"`)
+    console.log(`[LeaseLens] Para map: ${paras.length} non-empty paragraphs. First 5:`);
+    paras.slice(0, 5).forEach((p) =>
+      console.log(`  [para ${p.paraIdx}] ${p.cleanText.length}ch ${p.cleanText.split(/\s+/).length}w | "${p.cleanText.slice(0, 120)}"`)
     );
   }
 
-  if (debugIdx !== undefined && debugIdx < 3) {
+  // ── Diagnostic: per-clause pre-match info (first 5 clauses) ────────────────
+  if (debugIdx !== undefined && debugIdx < 5) {
     const normExtract = verbatimExtract
       ? verbatimExtract.replace(/\s+/g, ' ').trim().toLowerCase()
       : null;
-    const extractHit = normExtract
-      ? paras.find(p => p.cleanText.toLowerCase().includes(normExtract))
-      : null;
-    const nameHit = paras.find(p => whyClauseMatchesPara(clauseName, p.cleanText) !== null);
-    console.group(`[LeaseLens] Clause #${debugIdx} matching debug`);
-    console.log('  name          :', clauseName);
+    const extractHitAll  = normExtract ? paras.find(p => p.cleanText.toLowerCase().includes(normExtract)) : null;
+    const extractHitBody = normExtract ? paras.find(p => isBodyParagraph(p.cleanText) && p.cleanText.toLowerCase().includes(normExtract)) : null;
+    const nameHitBody    = paras.find(p => isBodyParagraph(p.cleanText) && whyClauseMatchesPara(clauseName, p.cleanText) !== null);
+    console.group(`[LeaseLens] Clause #${debugIdx} pre-match`);
+    console.log('  name           :', clauseName);
     console.log('  verbatimExtract:', verbatimExtract || '(none)');
-    console.log('  extract hit   :', extractHit
-      ? `YES → "${extractHit.cleanText.slice(0, 100)}"`
-      : 'NO — no paragraph contains this substring');
-    console.log('  name hit      :', nameHit
-      ? `YES (${whyClauseMatchesPara(clauseName, nameHit.cleanText)}) → "${nameHit.cleanText.slice(0, 100)}"`
-      : 'NO — no paragraph matched clause name heuristics');
+    console.log('  extract (any)  :', extractHitAll  ? `para[${extractHitAll.paraIdx}]  "${extractHitAll.cleanText.slice(0, 80)}"` : 'NO MATCH');
+    console.log('  extract (body) :', extractHitBody ? `para[${extractHitBody.paraIdx}] "${extractHitBody.cleanText.slice(0, 80)}"` : 'NO MATCH — all hits were too short');
+    console.log('  name (body)    :', nameHitBody    ? `para[${nameHitBody.paraIdx}] (${whyClauseMatchesPara(clauseName, nameHitBody.cleanText)}) "${nameHitBody.cleanText.slice(0, 80)}"` : 'NO MATCH');
     console.groupEnd();
   }
-  // ────────────────────────────────────────────────────────────────────────────
+  // ───────────────────────────────────────────────────────────────────────────
 
-  // Strategy 1: verbatim extract — substring match against clean paragraph text.
-  // Only paragraphs whose concatenated <w:t> text contains the extract are candidates.
+  // Strategy 1: verbatim extract.
+  // Requires the matched paragraph to pass isBodyParagraph — skips headings and TOC lines.
   if (verbatimExtract) {
     const normExtract = verbatimExtract.replace(/\s+/g, ' ').trim().toLowerCase();
     for (const para of paras) {
       if (!para.cleanText.toLowerCase().includes(normExtract)) continue;
+      if (!isBodyParagraph(para.cleanText)) {
+        console.log(`[LeaseLens] skip para[${para.paraIdx}] for "${clauseName}" — verbatim match but too short (${para.cleanText.split(/\s+/).length}w, ${para.cleanText.length}ch)`);
+        continue;
+      }
       const newXml = injectIntoParaEntry(xml, para, startTag, endTag, refRun);
       if (newXml !== null) {
-        console.log(`[LeaseLens] ✓ #${commentId} anchored "${clauseName}" via verbatimExtract`);
+        console.log(`[LeaseLens] ✓ #${commentId} para[${para.paraIdx}] via verbatimExtract | "${para.cleanText.slice(0, 100)}"`);
         return { xml: newXml, matched: true };
       }
     }
   }
 
-  // Strategy 2: clause name heuristics — only if verbatimExtract produced no result.
-  // Iterates paragraphs in document order; stops at the first paragraph that both
-  // matches the clause name AND has injectable runs.
+  // Strategy 2: clause name heuristics.
+  // Only body paragraphs are considered — same isBodyParagraph gate applies.
   for (const para of paras) {
+    if (!isBodyParagraph(para.cleanText)) continue;
     const reason = whyClauseMatchesPara(clauseName, para.cleanText);
     if (reason === null) continue;
     const newXml = injectIntoParaEntry(xml, para, startTag, endTag, refRun);
     if (newXml !== null) {
-      console.log(`[LeaseLens] ✓ #${commentId} matched "${clauseName}" → "${para.cleanText.slice(0, 100)}" (${reason})`);
+      console.log(`[LeaseLens] ✓ #${commentId} para[${para.paraIdx}] via name (${reason}) | "${para.cleanText.slice(0, 100)}"`);
       return { xml: newXml, matched: true };
     }
   }
 
-  // No match found via either strategy — do NOT anchor to any paragraph.
-  // This clause will be written to the separate unmatched file instead.
-  console.warn(`[LeaseLens] NO MATCH "${clauseName}" | extract="${verbatimExtract || '(none)'}" | paras checked=${paras.length}`);
+  // No qualifying match — do NOT anchor to any paragraph.
+  console.warn(`[LeaseLens] NO MATCH "${clauseName}" | extract="${verbatimExtract || '(none)'}" | body paras=${paras.filter(p => isBodyParagraph(p.cleanText)).length}/${paras.length}`);
   return { xml, matched: false };
 }
 
@@ -337,7 +346,7 @@ async function downloadAnnotatedDocx(filteredClauses, file) {
 
     clausesWithChanges.forEach((clause, idx) => {
       const commentId = idBase + idx;
-      const result = injectCommentMarkers(docXml, clause.name, commentId, clause.verbatimExtract, idx < 3 ? idx : undefined);
+      const result = injectCommentMarkers(docXml, clause.name, commentId, clause.verbatimExtract, idx < 5 ? idx : undefined);
 
       if (result.matched) {
         docXml = result.xml;
