@@ -43,6 +43,30 @@ genClause: string or null (full drafted replacement clause text using the agreem
 lenderFlag: boolean (true if this clause is relevant to a landlord's lender)
 verbatimExtract: string — exactly 10-15 consecutive words copied verbatim from the body text of this clause (not the heading, not paraphrased — exact words as they appear in the document, used to locate the clause in the source file)`;
 
+// Quick jurisdiction detection — runs on the first ~4 000 chars of the document.
+// Returns the detected jurisdiction string, or '' if nothing clear is found.
+export async function detectJurisdiction(text) {
+  try {
+    const message = await client.messages.create({
+      model: 'claude-haiku-4-5-20251001',
+      max_tokens: 60,
+      messages: [{
+        role: 'user',
+        content:
+          'What is the governing law jurisdiction of this lease agreement? ' +
+          'Look for a "Governing Law", "Jurisdiction", or similar clause. ' +
+          'Reply with just the jurisdiction name (e.g. "Ontario, Canada" or "England and Wales"). ' +
+          'If not stated, reply with exactly: Not specified\n\n' +
+          text.slice(0, 4000),
+      }],
+    });
+    const result = message.content[0].text.trim();
+    return result.toLowerCase() === 'not specified' ? '' : result;
+  } catch {
+    return '';
+  }
+}
+
 const CHUNK_SIZE = 30000;
 
 function splitIntoChunks(text) {

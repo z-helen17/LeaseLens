@@ -1,6 +1,6 @@
 import { useState, useEffect, useRef, useMemo } from 'react';
 import { extractText } from '../utils/extractText.js';
-import { analyzeWithClaude } from '../utils/analyzeWithClaude.js';
+import { analyzeWithClaude, detectJurisdiction } from '../utils/analyzeWithClaude.js';
 
 const STATIC_STEPS = [
   'Scanning document & detecting jurisdiction clause',
@@ -12,7 +12,14 @@ const STATIC_STEPS = [
 
 const STEP_DURATION = 2600;
 
-export default function LoadingScreen({ file, location, onComplete, onError }) {
+// When onReadyToAnalyze is provided the component runs extraction + jurisdiction
+// detection only, then calls onReadyToAnalyze(text, detectedJurisdiction) and stops.
+// When extractedText is provided, extraction is skipped.
+// confirmedJurisdiction overrides location for the analysis API call.
+export default function LoadingScreen({
+  file, location, onComplete, onError,
+  extractedText, confirmedJurisdiction, onReadyToAnalyze,
+}) {
   const [stepIndex, setStepIndex] = useState(-1);
   const [apiDone, setApiDone] = useState(false);
   const [chunkState, setChunkState] = useState({ current: 0, total: 0 });
@@ -66,14 +73,23 @@ export default function LoadingScreen({ file, location, onComplete, onError }) {
     }
   }, [stepIndex, apiDone, steps.length]);
 
-  // Run extraction + API call
+  // Run extraction + jurisdiction detection (detection mode) OR full analysis
   useEffect(() => {
     let cancelled = false;
     async function run() {
       try {
-        const text = await extractText(file);
+        const text = extractedText ?? await extractText(file);
         if (cancelled) return;
-        const clauses = await analyzeWithClaude(text, location, (current, total) => {
+
+        if (onReadyToAnalyze) {
+          // Detection-only mode: detect jurisdiction then hand control back to App.
+          const detected = await detectJurisdiction(text);
+          if (!cancelled) onReadyToAnalyze(text, detected);
+          return;
+        }
+
+        const jurisdiction = confirmedJurisdiction || location;
+        const clauses = await analyzeWithClaude(text, jurisdiction, (current, total) => {
           if (!cancelled) setChunkState({ current, total });
         });
         if (cancelled) return;
@@ -88,6 +104,32 @@ export default function LoadingScreen({ file, location, onComplete, onError }) {
   }, []);
 
   const fileExt = file.name.split('.').pop().toUpperCase();
+
+  // Detection-only mode: minimal UI while extracting text + detecting jurisdiction
+  if (onReadyToAnalyze) {
+    return (
+      <div style={{ minHeight: '100vh', display: 'flex', flexDirection: 'column' }}>
+        <header style={{ background: '#1B2E4B', padding: '14px 28px' }}>
+          <span style={{ color: 'white', fontSize: '18px', fontWeight: '700' }}>LeaseLens</span>
+        </header>
+        <main style={{ flex: 1, display: 'flex', alignItems: 'center', justifyContent: 'center', padding: '48px 20px' }}>
+          <div style={{ maxWidth: '480px', width: '100%' }}>
+            <div style={{ background: 'white', borderRadius: '12px', padding: '20px 24px', marginBottom: '28px', display: 'flex', alignItems: 'center', gap: '16px', boxShadow: '0 1px 4px rgba(0,0,0,0.08)', border: '1px solid #e5e7eb' }}>
+              <div style={{ width: '44px', height: '44px', background: '#f0fdf4', borderRadius: '8px', display: 'flex', alignItems: 'center', justifyContent: 'center', fontSize: '20px', flexShrink: 0 }}>✓</div>
+              <div style={{ overflow: 'hidden' }}>
+                <p style={{ fontWeight: '700', color: '#166534', fontSize: '14px', marginBottom: '2px' }}>{fileExt} uploaded successfully</p>
+                <p style={{ fontSize: '13px', color: '#6b7280', overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>{file.name}</p>
+              </div>
+            </div>
+            <div style={{ background: 'white', borderRadius: '12px', padding: '24px', boxShadow: '0 1px 4px rgba(0,0,0,0.08)', border: '1px solid #e5e7eb', display: 'flex', alignItems: 'center', gap: '14px' }}>
+              <Spinner />
+              <span style={{ fontSize: '13px', fontWeight: '600', color: '#1B2E4B' }}>Reading document & detecting jurisdiction…</span>
+            </div>
+          </div>
+        </main>
+      </div>
+    );
+  }
 
   return (
     <div style={{ minHeight: '100vh', display: 'flex', flexDirection: 'column' }}>
