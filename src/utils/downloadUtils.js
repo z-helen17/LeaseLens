@@ -174,9 +174,10 @@ function injectIntoParaEntry(xml, para, startTag, endTag, refRun) {
   return xml.slice(0, para.start) + newPara + xml.slice(para.end);
 }
 
-// Search the pre-built paragraph map for verbatimExtract (preferred) then clauseName
-// (fallback). Injects comment markers at the matched paragraph position.
-// debugIdx: pass the 0-based clause index for the first 3 clauses; omit/undefined otherwise.
+// Search the pre-built paragraph map for verbatimExtract (strategy 1) then
+// clauseName heuristics (strategy 2). If neither finds a paragraph with
+// injectable runs, returns matched:false — no fallback anchor ever fires.
+// debugIdx: pass the 0-based clause index for the first 3 clauses; omit otherwise.
 // Returns { xml: string, matched: boolean }.
 function injectCommentMarkers(xml, clauseName, commentId, verbatimExtract, debugIdx) {
   const startTag = `<w:commentRangeStart w:id="${commentId}"/>`;
@@ -216,29 +217,36 @@ function injectCommentMarkers(xml, clauseName, commentId, verbatimExtract, debug
   }
   // ────────────────────────────────────────────────────────────────────────────
 
-  // First pass: verbatim extract — substring match against clean paragraph text
+  // Strategy 1: verbatim extract — substring match against clean paragraph text.
+  // Only paragraphs whose concatenated <w:t> text contains the extract are candidates.
   if (verbatimExtract) {
     const normExtract = verbatimExtract.replace(/\s+/g, ' ').trim().toLowerCase();
     for (const para of paras) {
       if (!para.cleanText.toLowerCase().includes(normExtract)) continue;
       const newXml = injectIntoParaEntry(xml, para, startTag, endTag, refRun);
-      if (newXml) {
-        console.log(`[LeaseLens] ✓ comment #${commentId} anchored "${clauseName}" via verbatimExtract`);
+      if (newXml !== null) {
+        console.log(`[LeaseLens] ✓ #${commentId} anchored "${clauseName}" via verbatimExtract`);
         return { xml: newXml, matched: true };
       }
     }
   }
 
-  // Second pass: clause name heuristic fallback
+  // Strategy 2: clause name heuristics — only if verbatimExtract produced no result.
+  // Iterates paragraphs in document order; stops at the first paragraph that both
+  // matches the clause name AND has injectable runs.
   for (const para of paras) {
     const reason = whyClauseMatchesPara(clauseName, para.cleanText);
-    if (!reason) continue;
-    console.log(`[LeaseLens] ✓ comment #${commentId} matched "${clauseName}" → "${para.cleanText.slice(0, 100)}" (${reason})`);
+    if (reason === null) continue;
     const newXml = injectIntoParaEntry(xml, para, startTag, endTag, refRun);
-    if (newXml) return { xml: newXml, matched: true };
+    if (newXml !== null) {
+      console.log(`[LeaseLens] ✓ #${commentId} matched "${clauseName}" → "${para.cleanText.slice(0, 100)}" (${reason})`);
+      return { xml: newXml, matched: true };
+    }
   }
 
-  console.warn(`[LeaseLens] NO MATCH for "${clauseName}" (verbatimExtract="${verbatimExtract || ''}", checked ${paras.length} paras) — adding to unmatched file`);
+  // No match found via either strategy — do NOT anchor to any paragraph.
+  // This clause will be written to the separate unmatched file instead.
+  console.warn(`[LeaseLens] NO MATCH "${clauseName}" | extract="${verbatimExtract || '(none)'}" | paras checked=${paras.length}`);
   return { xml, matched: false };
 }
 
