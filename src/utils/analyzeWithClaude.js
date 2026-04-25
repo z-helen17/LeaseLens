@@ -12,6 +12,8 @@ PASS 2: Go through every clause in the document and review it against market sta
 PASS 3: Assign each clause an internal score from 1-100 (1=most landlord friendly, 100=most tenant friendly) and a display bias of 1-5 (1=very landlord friendly, 2=leans landlord, 3=neutral, 4=leans tenant, 5=very tenant friendly). Also use 'x' for clauses that are unclear or contain likely drafting errors.
 For scoring, use this mapping: 1-20=bias 1, 21-40=bias 2, 41-60=bias 3, 61-80=bias 4, 81-100=bias 5. Score all clauses first across the whole document before finalising, so scores are internally consistent.
 Be concise: keep each "note" field to a maximum of 2 sentences, and each "change" field to a maximum of 1 sentence.
+If the document is bilingual or contains text in multiple languages, analyse the English text only and propose changes in English only. Do not propose rewrites in other languages. The only exception is where there is a direct inconsistency between the two language versions (e.g. different numbers, names or defined terms) — in that case flag it as an 'x' drafting error and note the inconsistency clearly.
+Your entire response must be valid JSON only. Do not include markdown backticks, code fences, or any text outside the JSON array. All string values must use only standard ASCII apostrophes and quotation marks. Do not use curly quotes, special dashes, or non-ASCII punctuation inside JSON strings. If you need to include a quote inside a string value, escape it with a backslash.
 Return ONLY a valid JSON array with no other text, markdown or backticks. Each element must have these exact fields:
 
 name: string — CRITICAL RULE: You MUST prefix every clause name with its clause number exactly as it appears in the document. Format: "6.3 — Clause Name" or "6.3.1 — Clause Name". If a provision is in a schedule, prefix with the schedule reference e.g. "Schedule 2 — Clause Name". Never return a clause name without its document reference number. If a clause genuinely has no number or schedule reference, use the section heading as-is.
@@ -28,6 +30,8 @@ const SYSTEM_PROMPT_CHUNK = `You are a commercial real estate lawyer analysing l
 For each clause you find: review it against market standards for the jurisdiction provided (or infer from any governing law clause visible in this portion). Assign an internal score from 1-100 (1=most landlord friendly, 100=most tenant friendly) and a display bias of 1-5 (1=very landlord friendly, 2=leans landlord, 3=neutral, 4=leans tenant, 5=very tenant friendly). Use 'x' for clauses that are unclear or contain likely drafting errors.
 Score mapping: 1-20=bias 1, 21-40=bias 2, 41-60=bias 3, 61-80=bias 4, 81-100=bias 5.
 Be concise: keep each "note" field to a maximum of 2 sentences, and each "change" field to a maximum of 1 sentence.
+If the document is bilingual or contains text in multiple languages, analyse the English text only and propose changes in English only. Do not propose rewrites in other languages. The only exception is where there is a direct inconsistency between the two language versions (e.g. different numbers, names or defined terms) — in that case flag it as an 'x' drafting error and note the inconsistency clearly.
+Your entire response must be valid JSON only. Do not include markdown backticks, code fences, or any text outside the JSON array. All string values must use only standard ASCII apostrophes and quotation marks. Do not use curly quotes, special dashes, or non-ASCII punctuation inside JSON strings. If you need to include a quote inside a string value, escape it with a backslash.
 Return ONLY a valid JSON array with no other text, markdown or backticks. Each element must have these exact fields:
 
 name: string — CRITICAL RULE: You MUST prefix every clause name with its clause number exactly as it appears in the document. Format: "6.3 — Clause Name" or "6.3.1 — Clause Name". If a provision is in a schedule, prefix with the schedule reference e.g. "Schedule 2 — Clause Name". Never return a clause name without its document reference number. If a clause genuinely has no number or schedule reference, use the section heading as-is.
@@ -74,9 +78,18 @@ function sanitizeJsonString(raw) {
 function parseResponse(raw) {
   console.log('Raw API response:', raw);
 
-  const match = raw.match(/\[[\s\S]*\]/);
+  // Normalise curly quotes, smart dashes, and strip any code fences before extraction.
+  const cleaned = raw
+    .replace(/[‘’]/g, "'")
+    .replace(/[“”]/g, '"')
+    .replace(/[–—]/g, '-')
+    .replace(/```json/g, '')
+    .replace(/```/g, '')
+    .trim();
+
+  const match = cleaned.match(/\[[\s\S]*\]/);
   if (!match) {
-    console.error('No JSON array found in response:', raw);
+    console.error('No JSON array found in response:', cleaned);
     throw new Error('The AI returned an unexpected format. Please try again.');
   }
 
