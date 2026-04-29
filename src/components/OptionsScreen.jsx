@@ -31,14 +31,14 @@ const OPTIONS = [
   },
 ];
 
-export default function OptionsScreen({ clauses, onSelect }) {
+export default function OptionsScreen({ clauses, onSelect, onLogoClick }) {
   const { display } = computeOverallScore(clauses);
   const biasLabel = BIAS_LABELS[display];
 
   return (
     <div style={{ minHeight: '100vh', display: 'flex', flexDirection: 'column' }}>
       <header style={{ background: '#1B2E4B', padding: '14px 28px' }}>
-        <span style={{ color: 'white', fontSize: '18px', fontWeight: '700' }}>LeaseLens</span>
+        <span onClick={onLogoClick} style={{ color: 'white', fontSize: '18px', fontWeight: '700', cursor: 'pointer' }}>LeaseLens</span>
       </header>
 
       <main

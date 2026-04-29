@@ -1,10 +1,10 @@
-export default function JurisdictionScreen({ detectedJurisdiction, userLocation, onConfirm }) {
+export default function JurisdictionScreen({ detectedJurisdiction, userLocation, onConfirm, onLogoClick }) {
   const hasUser = userLocation && userLocation.trim().length > 0;
 
   return (
     <div style={{ minHeight: '100vh', display: 'flex', flexDirection: 'column' }}>
       <header style={{ background: '#1B2E4B', padding: '14px 28px' }}>
-        <span style={{ color: 'white', fontSize: '18px', fontWeight: '700' }}>LeaseLens</span>
+        <span onClick={onLogoClick} style={{ color: 'white', fontSize: '18px', fontWeight: '700', cursor: 'pointer' }}>LeaseLens</span>
       </header>
 
       <main style={{ flex: 1, display: 'flex', alignItems: 'center', justifyContent: 'center', padding: '48px 20px' }}>

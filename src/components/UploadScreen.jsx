@@ -1,6 +1,6 @@
 import { useState, useRef } from 'react';
 
-export default function UploadScreen({ onSubmit, externalError }) {
+export default function UploadScreen({ onSubmit, externalError, onLogoClick }) {
   const [file, setFile] = useState(null);
   const [location, setLocation] = useState('');
   const [isDragging, setIsDragging] = useState(false);
@@ -37,7 +37,7 @@ export default function UploadScreen({ onSubmit, externalError }) {
   return (
     <div style={{ minHeight: '100vh', display: 'flex', flexDirection: 'column' }}>
       <header style={{ background: '#1B2E4B', padding: '14px 28px', display: 'flex', alignItems: 'center' }}>
-        <span style={{ color: 'white', fontSize: '18px', fontWeight: '700', letterSpacing: '-0.3px' }}>
+        <span onClick={onLogoClick} style={{ color: 'white', fontSize: '18px', fontWeight: '700', letterSpacing: '-0.3px', cursor: 'pointer' }}>
           LeaseLens
         </span>
       </header>

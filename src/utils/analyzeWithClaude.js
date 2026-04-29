@@ -10,7 +10,7 @@ const SYSTEM_PROMPT_FULL = `You are a commercial real estate lawyer analysing a 
 PASS 1: Scan the entire document for any explicit jurisdiction or governing law clause. Note the jurisdiction found, or use the location provided by the user if none found.
 PASS 2: Go through every clause in the document and review it against market standards for that jurisdiction.
 PASS 3: Assign each clause an internal score from 1-100 (1=most landlord friendly, 100=most tenant friendly) and a display bias of 1-5 (1=very landlord friendly, 2=leans landlord, 3=neutral, 4=leans tenant, 5=very tenant friendly). Also use 'x' for clauses that are unclear or contain likely drafting errors.
-For scoring, use this mapping: 1-20=bias 1, 21-40=bias 2, 41-60=bias 3, 61-80=bias 4, 81-100=bias 5. Score all clauses first across the whole document before finalising, so scores are internally consistent.
+For scoring, use this mapping: 1-20=bias 1, 21-40=bias 2, 41-60=bias 3, 61-80=bias 4, 81-100=bias 5. Emit each clause object immediately as you score it. Do not wait until you have reviewed the whole document before outputting.
 Be concise: keep each "note" field to a maximum of 2 sentences, and each "change" field to a maximum of 1 sentence.
 If the document is bilingual or contains text in multiple languages, analyse the English text only and propose changes in English only. Do not propose rewrites in other languages. The only exception is where there is a direct inconsistency between the two language versions (e.g. different numbers, names or defined terms) — in that case flag it as an 'x' drafting error and note the inconsistency clearly.
 Your entire response must be valid JSON only. Do not include markdown backticks, code fences, or any text outside the JSON array. All string values must use only standard ASCII apostrophes and quotation marks. Do not use curly quotes, special dashes, or non-ASCII punctuation inside JSON strings. If you need to include a quote inside a string value, escape it with a backslash.
@@ -28,7 +28,7 @@ verbatimExtract: string — exactly 10-15 consecutive words copied verbatim from
 const SYSTEM_PROMPT_CHUNK = `You are a commercial real estate lawyer analysing lease agreement clauses for bias. You will be given a portion of a lease. Analyse ONLY the clauses present in this portion and return your results immediately — do NOT wait for additional parts, do NOT ask for more context, do NOT say the document is incomplete.
 
 For each clause you find: review it against market standards for the jurisdiction provided (or infer from any governing law clause visible in this portion). Assign an internal score from 1-100 (1=most landlord friendly, 100=most tenant friendly) and a display bias of 1-5 (1=very landlord friendly, 2=leans landlord, 3=neutral, 4=leans tenant, 5=very tenant friendly). Use 'x' for clauses that are unclear or contain likely drafting errors.
-Score mapping: 1-20=bias 1, 21-40=bias 2, 41-60=bias 3, 61-80=bias 4, 81-100=bias 5.
+Score mapping: 1-20=bias 1, 21-40=bias 2, 41-60=bias 3, 61-80=bias 4, 81-100=bias 5. Emit each clause object immediately as you score it. Do not wait until you have reviewed the whole document before outputting.
 Be concise: keep each "note" field to a maximum of 2 sentences, and each "change" field to a maximum of 1 sentence.
 If the document is bilingual or contains text in multiple languages, analyse the English text only and propose changes in English only. Do not propose rewrites in other languages. The only exception is where there is a direct inconsistency between the two language versions (e.g. different numbers, names or defined terms) — in that case flag it as an 'x' drafting error and note the inconsistency clearly.
 Your entire response must be valid JSON only. Do not include markdown backticks, code fences, or any text outside the JSON array. All string values must use only standard ASCII apostrophes and quotation marks. Do not use curly quotes, special dashes, or non-ASCII punctuation inside JSON strings. If you need to include a quote inside a string value, escape it with a backslash.
@@ -104,12 +104,10 @@ function sanitizeJsonString(raw) {
 }
 
 function parseResponse(raw) {
-  console.log('Raw API response:', raw);
-
   // Normalise curly quotes, smart dashes, and strip any code fences before extraction.
   const cleaned = raw
-    .replace(/[‘’]/g, "'")
-    .replace(/[“”]/g, '"')
+    .replace(/['']/g, "'")
+    .replace(/[""]/g, '"')
     .replace(/[–—]/g, '-')
     .replace(/```json/g, '')
     .replace(/```/g, '')
@@ -149,48 +147,123 @@ function parseResponse(raw) {
   }
 }
 
-async function callAnalyzeAPI(system, messages) {
-  return client.messages.create({
+// djb2-based hash of the first 200 + last 200 chars and total length
+function hashText(text) {
+  const key = text.slice(0, 200) + text.slice(-200) + text.length;
+  let hash = 5381;
+  for (let i = 0; i < key.length; i++) {
+    hash = ((hash << 5) + hash) ^ key.charCodeAt(i);
+    hash = hash >>> 0; // keep unsigned 32-bit
+  }
+  return 'll_cache_' + hash;
+}
+
+async function streamAnalyzeAPI(system, messages, onToken) {
+  let fullText = '';
+  let tokenCount = 0;
+  const stream = client.messages.stream({
     model: 'claude-sonnet-4-6',
-    max_tokens: 16000,
+    max_tokens: 32000,
     system,
     messages,
   });
+  stream.on('text', (text) => {
+    tokenCount++;
+    fullText += text;
+    onToken(text);
+  });
+  await stream.finalMessage();
+  return fullText;
 }
 
 // onProgress(currentChunkNumber, totalChunks) — called before each API call (1-indexed)
-export async function analyzeWithClaude(text, location, onProgress = () => {}) {
+// onClause(clause) — called each time a complete clause object is parsed mid-stream
+export async function analyzeWithClaude(text, location, onProgress = () => {}, onClause = () => {}) {
+  const cacheKey = hashText(text);
+  try {
+    const cached = localStorage.getItem(cacheKey);
+    if (cached) {
+      return JSON.parse(cached);
+    }
+  } catch (_) {}
+
   const chunks = splitIntoChunks(text);
   const totalChunks = chunks.length;
   const allClauses = [];
 
-  for (let i = 0; i < totalChunks; i++) {
-    onProgress(i + 1, totalChunks);
+  onProgress(0, totalChunks);
 
-    const isChunked = totalChunks > 1;
-    const systemPrompt = isChunked ? SYSTEM_PROMPT_CHUNK : SYSTEM_PROMPT_FULL;
+  const isChunked = totalChunks > 1;
+  const systemPrompt = isChunked ? SYSTEM_PROMPT_CHUNK : SYSTEM_PROMPT_FULL;
 
+  const chunkPromises = chunks.map((chunk, i) => {
     const chunkHeader = isChunked
       ? `IMPORTANT: You are analysing part ${i + 1} of ${totalChunks} of a lease agreement. Analyse ONLY the clauses present in this part. Do NOT wait for other parts. Do NOT ask for more context. Return a JSON array immediately for the clauses in this part only. Other parts will be analysed separately and merged later.\n\n`
       : '';
 
-    const message = await callAnalyzeAPI(systemPrompt, [
+    let streamBuffer = '';
+
+    return streamAnalyzeAPI(systemPrompt, [
       {
         role: 'user',
-        content: `${chunkHeader}Location / Jurisdiction: ${location || 'Not specified — infer from the governing law clause if present'}\n\nLease Agreement Text:\n\n${chunks[i]}`,
+        content: `${chunkHeader}Location / Jurisdiction: ${location || 'Not specified — infer from the governing law clause if present'}\n\nLease Agreement Text:\n\n${chunk}`,
       },
-    ]);
+    ], (token) => {
+      streamBuffer += token;
+      // Bracket-depth parser: extract complete JSON objects as they arrive
+      let depth = 0;
+      let start = -1;
+      let consumed = 0;
+      for (let j = 0; j < streamBuffer.length; j++) {
+        const ch = streamBuffer[j];
+        if (ch === '{') {
+          if (depth === 0) start = j;
+          depth++;
+        } else if (ch === '}') {
+          depth--;
+          if (depth === 0 && start !== -1) {
+            const candidate = streamBuffer.slice(start, j + 1);
+            try {
+              const clause = JSON.parse(candidate);
+              if (clause.name && clause.bias !== undefined) {
+                onClause(clause);
+              }
+            } catch (_) {}
+            consumed = j + 1;
+            start = -1;
+          }
+        }
+      }
+      if (consumed > 0) streamBuffer = streamBuffer.slice(consumed);
+    });
+  });
 
-    const clauses = parseResponse(message.content[0].text.trim());
-    allClauses.push(...clauses);
+  const results = await Promise.allSettled(chunkPromises);
+
+  for (const result of results) {
+    if (result.status === 'fulfilled') {
+      // Safety net: parseResponse catches anything the mid-stream parser missed
+      const clauses = parseResponse(result.value);
+      allClauses.push(...clauses);
+    } else {
+      console.error('[chunk] failed:', result.reason);
+    }
   }
 
   // Deduplicate by name (keep first occurrence, case-insensitive)
   const seen = new Set();
-  return allClauses.filter((clause) => {
+  const result = allClauses.filter((clause) => {
     const key = (clause.name || '').trim().toLowerCase();
     if (seen.has(key)) return false;
     seen.add(key);
     return true;
   });
+
+  try {
+    localStorage.setItem(cacheKey, JSON.stringify(result));
+  } catch (e) {
+    console.warn('LeaseLens: cache write failed', e);
+  }
+
+  return result;
 }

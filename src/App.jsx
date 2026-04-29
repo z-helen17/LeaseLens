@@ -80,17 +80,23 @@ export default function App() {
     setError(null);
   };
 
+  const handleBackToOptions = () => {
+    setScreen('options');
+  };
+
   let content = null;
 
   if (screen === 'upload') {
-    content = <UploadScreen onSubmit={handleUpload} externalError={error} />;
+    content = <UploadScreen onSubmit={handleUpload} externalError={error} onLogoClick={handleStartOver} />;
   } else if (screen === 'loading') {
     content = (
       <LoadingScreen
+        key="detection"
         file={uploadData.file}
         location={uploadData.location}
         onReadyToAnalyze={handleReadyToAnalyze}
         onError={handleAnalysisError}
+        onLogoClick={handleStartOver}
       />
     );
   } else if (screen === 'jurisdiction') {
@@ -99,21 +105,24 @@ export default function App() {
         detectedJurisdiction={detectedJurisdiction}
         userLocation={uploadData?.location}
         onConfirm={handleJurisdictionConfirm}
+        onLogoClick={handleStartOver}
       />
     );
   } else if (screen === 'analyzing') {
     content = (
       <LoadingScreen
+        key="analyzing"
         file={uploadData.file}
         location={uploadData.location}
         extractedText={extractedText}
         confirmedJurisdiction={confirmedJurisdiction}
         onComplete={handleAnalysisComplete}
         onError={handleAnalysisError}
+        onLogoClick={handleStartOver}
       />
     );
   } else if (screen === 'options') {
-    content = <OptionsScreen clauses={clauses} onSelect={handleOptionSelect} />;
+    content = <OptionsScreen clauses={clauses} onSelect={handleOptionSelect} onLogoClick={handleStartOver} />;
   } else if (screen === 'report') {
     content = (
       <ReportScreen
@@ -122,6 +131,8 @@ export default function App() {
         file={uploadData.file}
         onStartOver={handleStartOver}
         onChangeOption={handleOptionSelect}
+        onLogoClick={handleStartOver}
+        onBackToOptions={handleBackToOptions}
       />
     );
   }

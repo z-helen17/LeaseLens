@@ -24,7 +24,7 @@ const OPTION_LABELS = {
   4: 'Lender-Friendly View',
 };
 
-export default function ReportScreen({ clauses, option, file, onStartOver, onChangeOption }) {
+export default function ReportScreen({ clauses, option, file, onStartOver, onChangeOption, onLogoClick, onBackToOptions }) {
   const { display, mean } = computeOverallScore(clauses);
   const filtered = filterAndSort(clauses, option);
   const barData = getBarChartData(clauses, option, mean);
@@ -70,7 +70,7 @@ export default function ReportScreen({ clauses, option, file, onStartOver, onCha
           zIndex: 100,
         }}
       >
-        <span style={{ color: 'white', fontSize: '18px', fontWeight: '700', marginRight: 'auto' }}>
+        <span onClick={onLogoClick} style={{ color: 'white', fontSize: '18px', fontWeight: '700', marginRight: 'auto', cursor: 'pointer' }}>
           LeaseLens
         </span>
         <select
@@ -106,6 +106,24 @@ export default function ReportScreen({ clauses, option, file, onStartOver, onCha
           style={headerBtn()}
         >
           {downloading === 'word' ? 'Generating…' : '↓ Word'}
+        </button>
+        <button
+          onClick={onBackToOptions}
+          style={{
+            background: 'white',
+            color: '#1B2E4B',
+            border: '1.5px solid white',
+            borderRadius: '6px',
+            padding: '7px 14px',
+            fontSize: '13px',
+            fontWeight: '600',
+            cursor: 'pointer',
+            whiteSpace: 'nowrap',
+          }}
+          onMouseEnter={(e) => { e.currentTarget.style.background = '#1B2E4B'; e.currentTarget.style.color = 'white'; }}
+          onMouseLeave={(e) => { e.currentTarget.style.background = 'white'; e.currentTarget.style.color = '#1B2E4B'; }}
+        >
+          Change Perspective
         </button>
         <button
           onClick={onStartOver}

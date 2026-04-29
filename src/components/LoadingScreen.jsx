@@ -1,16 +1,6 @@
-import { useState, useEffect, useRef, useMemo } from 'react';
+import { useState, useEffect, useRef } from 'react';
 import { extractText } from '../utils/extractText.js';
 import { analyzeWithClaude, detectJurisdiction } from '../utils/analyzeWithClaude.js';
-
-const STATIC_STEPS = [
-  'Scanning document & detecting jurisdiction clause',
-  'Reviewing clauses against jurisdiction market standards',
-  'Assigning bias scores to each clause',
-  'Computing overall agreement balance',
-  'Generating your report',
-];
-
-const STEP_DURATION = 2600;
 
 // When onReadyToAnalyze is provided the component runs extraction + jurisdiction
 // detection only, then calls onReadyToAnalyze(text, detectedJurisdiction) and stops.
@@ -18,60 +8,21 @@ const STEP_DURATION = 2600;
 // confirmedJurisdiction overrides location for the analysis API call.
 export default function LoadingScreen({
   file, location, onComplete, onError,
-  extractedText, confirmedJurisdiction, onReadyToAnalyze,
+  extractedText, confirmedJurisdiction, onReadyToAnalyze, onLogoClick,
 }) {
-  const [stepIndex, setStepIndex] = useState(-1);
   const [apiDone, setApiDone] = useState(false);
-  const [chunkState, setChunkState] = useState({ current: 0, total: 0 });
+  const [streamedCount, setStreamedCount] = useState(0);
   const clausesRef = useRef(null);
   const completedRef = useRef(false);
 
-  const isMultiChunk = chunkState.total > 1;
-
-  const steps = useMemo(() => {
-    if (!isMultiChunk) return STATIC_STEPS;
-    return [
-      ...Array.from({ length: chunkState.total }, (_, i) => `Analysing part ${i + 1} of ${chunkState.total}`),
-      'Merging and deduplicating clauses',
-      'Generating your report',
-    ];
-  }, [isMultiChunk, chunkState.total]);
-
-  // Initial step animation kick-off (single-chunk only)
+  // Proceed to next screen once analysis is complete
   useEffect(() => {
-    if (isMultiChunk) return;
-    const t = setTimeout(() => setStepIndex(0), 900);
-    return () => clearTimeout(t);
-  }, [isMultiChunk]);
-
-  // Timer-based step auto-advance (single-chunk only)
-  useEffect(() => {
-    if (isMultiChunk) return;
-    if (stepIndex < 0 || stepIndex >= steps.length - 1) return;
-    const t = setTimeout(() => setStepIndex((s) => s + 1), STEP_DURATION);
-    return () => clearTimeout(t);
-  }, [stepIndex, isMultiChunk, steps.length]);
-
-  // Progress-based step advance (multi-chunk only)
-  useEffect(() => {
-    if (!isMultiChunk || chunkState.current === 0) return;
-    setStepIndex(chunkState.current - 1);
-  }, [chunkState, isMultiChunk]);
-
-  // When API is done in multi-chunk mode, advance to final step
-  useEffect(() => {
-    if (!isMultiChunk || !apiDone) return;
-    setStepIndex(steps.length - 1);
-  }, [apiDone, isMultiChunk, steps.length]);
-
-  // Proceed when last step shown AND api done
-  useEffect(() => {
-    if (stepIndex === steps.length - 1 && apiDone && !completedRef.current) {
+    if (apiDone && !completedRef.current) {
       completedRef.current = true;
-      const t = setTimeout(() => onComplete(clausesRef.current), 900);
+      const t = setTimeout(() => onComplete(clausesRef.current), 1200);
       return () => clearTimeout(t);
     }
-  }, [stepIndex, apiDone, steps.length]);
+  }, [apiDone]);
 
   // Run extraction + jurisdiction detection (detection mode) OR full analysis
   useEffect(() => {
@@ -89,8 +40,8 @@ export default function LoadingScreen({
         }
 
         const jurisdiction = confirmedJurisdiction || location;
-        const clauses = await analyzeWithClaude(text, jurisdiction, (current, total) => {
-          if (!cancelled) setChunkState({ current, total });
+        const clauses = await analyzeWithClaude(text, jurisdiction, () => {}, (clause) => {
+          if (!cancelled) setStreamedCount(c => c + 1);
         });
         if (cancelled) return;
         clausesRef.current = clauses;
@@ -105,12 +56,18 @@ export default function LoadingScreen({
 
   const fileExt = file.name.split('.').pop().toUpperCase();
 
+  // Progress bar calculation
+  const docLength = extractedText?.length || 0;
+  const baseEstimate = Math.round(docLength / 800);
+  const estimatedTotal = Math.max(baseEstimate, streamedCount + 5);
+  const barPercent = apiDone ? 100 : Math.min((streamedCount / estimatedTotal) * 100, 95);
+
   // Detection-only mode: minimal UI while extracting text + detecting jurisdiction
   if (onReadyToAnalyze) {
     return (
       <div style={{ minHeight: '100vh', display: 'flex', flexDirection: 'column' }}>
         <header style={{ background: '#1B2E4B', padding: '14px 28px' }}>
-          <span style={{ color: 'white', fontSize: '18px', fontWeight: '700' }}>LeaseLens</span>
+          <span onClick={onLogoClick} style={{ color: 'white', fontSize: '18px', fontWeight: '700', cursor: 'pointer' }}>LeaseLens</span>
         </header>
         <main style={{ flex: 1, display: 'flex', alignItems: 'center', justifyContent: 'center', padding: '48px 20px' }}>
           <div style={{ maxWidth: '480px', width: '100%' }}>
@@ -137,114 +94,108 @@ export default function LoadingScreen({
         <span style={{ color: 'white', fontSize: '18px', fontWeight: '700' }}>LeaseLens</span>
       </header>
 
-      <main
-        style={{
-          flex: 1,
-          display: 'flex',
-          alignItems: 'center',
-          justifyContent: 'center',
-          padding: '48px 20px',
-        }}
-      >
+      <main style={{ flex: 1, display: 'flex', alignItems: 'center', justifyContent: 'center', padding: '48px 20px' }}>
         <div style={{ maxWidth: '480px', width: '100%' }}>
-          {/* File success card */}
-          <div
-            style={{
-              background: 'white',
-              borderRadius: '12px',
-              padding: '20px 24px',
-              marginBottom: '28px',
+
+          {/* Upload success card */}
+          <div style={{
+            background: 'white',
+            borderRadius: '12px',
+            padding: '20px 24px',
+            marginBottom: '16px',
+            display: 'flex',
+            alignItems: 'center',
+            gap: '16px',
+            boxShadow: '0 1px 4px rgba(0,0,0,0.08)',
+            border: '1px solid #e5e7eb',
+          }}>
+            <div style={{
+              width: '44px',
+              height: '44px',
+              background: '#f0fdf4',
+              borderRadius: '8px',
               display: 'flex',
               alignItems: 'center',
-              gap: '16px',
-              boxShadow: '0 1px 4px rgba(0,0,0,0.08)',
-              border: '1px solid #e5e7eb',
-            }}
-          >
-            <div
-              style={{
-                width: '44px',
-                height: '44px',
-                background: '#f0fdf4',
-                borderRadius: '8px',
-                display: 'flex',
-                alignItems: 'center',
-                justifyContent: 'center',
-                fontSize: '20px',
-                flexShrink: 0,
-              }}
-            >
+              justifyContent: 'center',
+              fontSize: '20px',
+              flexShrink: 0,
+            }}>
               ✓
             </div>
             <div style={{ overflow: 'hidden' }}>
               <p style={{ fontWeight: '700', color: '#166534', fontSize: '14px', marginBottom: '2px' }}>
                 {fileExt} uploaded successfully
               </p>
-              <p
-                style={{
-                  fontSize: '13px',
-                  color: '#6b7280',
-                  overflow: 'hidden',
-                  textOverflow: 'ellipsis',
-                  whiteSpace: 'nowrap',
-                }}
-              >
+              <p style={{ fontSize: '13px', color: '#6b7280', overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>
                 {file.name}
               </p>
             </div>
           </div>
 
-          {/* Steps */}
-          <div style={{ background: 'white', borderRadius: '12px', padding: '24px', boxShadow: '0 1px 4px rgba(0,0,0,0.08)', border: '1px solid #e5e7eb' }}>
-            <p style={{ fontWeight: '700', fontSize: '14px', color: '#1B2E4B', marginBottom: '20px' }}>
-              {isMultiChunk
-                ? `Analysing your lease in ${chunkState.total} parts…`
-                : 'Analysing your lease…'}
-            </p>
-            {steps.map((step, i) => {
-              const isActive = i === stepIndex && !(i === steps.length - 1 && apiDone);
-              const isDone = i < stepIndex || (i === steps.length - 1 && apiDone);
-              const isPending = i > stepIndex;
+          {/* Jurisdiction badge */}
+          {confirmedJurisdiction && (
+            <div style={{
+              display: 'inline-flex',
+              alignItems: 'center',
+              gap: '8px',
+              marginBottom: '16px',
+              padding: '7px 14px',
+              background: '#f0fdf4',
+              borderRadius: '20px',
+              border: '1px solid #bbf7d0',
+            }}>
+              <svg width="16" height="16" viewBox="0 0 16 16" fill="none" style={{ flexShrink: 0 }}>
+                <circle cx="8" cy="8" r="8" fill="#1B2E4B" />
+                <path d="M4.5 8l2.5 2.5 4.5-4.5" stroke="white" strokeWidth="1.5" strokeLinecap="round" strokeLinejoin="round" />
+              </svg>
+              <span style={{ fontSize: '13px', color: '#166534', fontWeight: '500' }}>
+                Jurisdiction detected: {confirmedJurisdiction}
+              </span>
+            </div>
+          )}
 
-              return (
-                <div
-                  key={step}
-                  style={{
-                    display: 'flex',
-                    alignItems: 'center',
-                    gap: '14px',
-                    padding: '9px 0',
-                    borderBottom: i < steps.length - 1 ? '1px solid #f3f4f6' : 'none',
-                    opacity: isPending ? 0.35 : 1,
-                    transition: 'opacity 0.4s',
-                  }}
-                >
-                  <div style={{ width: '20px', height: '20px', flexShrink: 0, display: 'flex', alignItems: 'center', justifyContent: 'center' }}>
-                    {isDone ? (
-                      <svg width="20" height="20" viewBox="0 0 20 20" fill="none">
-                        <circle cx="10" cy="10" r="10" fill="#22c55e" />
-                        <path d="M6 10l3 3 5-5" stroke="white" strokeWidth="1.8" strokeLinecap="round" strokeLinejoin="round" />
-                      </svg>
-                    ) : isActive ? (
-                      <Spinner />
-                    ) : (
-                      <div style={{ width: '20px', height: '20px', borderRadius: '50%', border: '1.5px solid #d1d5db' }} />
-                    )}
-                  </div>
-                  <span
-                    style={{
-                      fontSize: '13px',
-                      color: isDone ? '#374151' : isActive ? '#1B2E4B' : '#9ca3af',
-                      fontWeight: isActive ? '600' : '400',
-                      transition: 'all 0.3s',
-                    }}
-                  >
-                    {step}
-                  </span>
-                </div>
-              );
-            })}
+          {/* Analysis card */}
+          <div style={{
+            background: 'white',
+            borderRadius: '12px',
+            padding: '24px',
+            boxShadow: '0 1px 4px rgba(0,0,0,0.08)',
+            border: '1px solid #e5e7eb',
+          }}>
+            <p style={{ fontWeight: '700', fontSize: '14px', color: '#1B2E4B', marginBottom: '4px' }}>
+              Analysing your lease…
+            </p>
+            <p style={{ fontSize: '12px', color: '#9ca3af', marginBottom: '20px' }}>
+              This may take a minute for longer documents
+            </p>
+
+            {/* Progress bar */}
+            <div style={{
+              background: '#e5e7eb',
+              borderRadius: '4px',
+              height: '8px',
+              overflow: 'hidden',
+              marginBottom: '14px',
+            }}>
+              <div style={{
+                height: '100%',
+                width: `${barPercent}%`,
+                background: '#1B2E4B',
+                borderRadius: '4px',
+                transition: 'width 0.4s ease',
+              }} />
+            </div>
+
+            {/* Live counter */}
+            <p style={{ fontSize: '13px', color: '#6b7280', textAlign: 'center', margin: 0 }}>
+              {apiDone
+                ? `${clausesRef.current?.length ?? streamedCount} clauses found — building your report…`
+                : streamedCount > 0
+                  ? `${streamedCount} clause${streamedCount !== 1 ? 's' : ''} identified so far…`
+                  : 'Reading document…'}
+            </p>
           </div>
+
         </div>
       </main>
     </div>
