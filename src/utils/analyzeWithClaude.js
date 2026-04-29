@@ -1,4 +1,5 @@
 import Anthropic from '@anthropic-ai/sdk';
+import { JURISDICTION_CONTEXT } from './jurisdictionContext.js';
 
 const client = new Anthropic({
   apiKey: import.meta.env.VITE_ANTHROPIC_API_KEY,
@@ -42,6 +43,16 @@ change: string or null (precise word-level change needed — what to replace wit
 genClause: string or null (full drafted replacement clause text using the agreement's own definitions and language, only when the change requires a new mechanism. Null otherwise.)
 lenderFlag: boolean (true if this clause is relevant to a landlord's lender)
 verbatimExtract: string — exactly 10-15 consecutive words copied verbatim from the body text of this clause (not the heading, not paraphrased — exact words as they appear in the document, used to locate the clause in the source file)`;
+
+function getJurisdictionContext(location) {
+  if (!location) return '';
+  const l = location.toLowerCase();
+  if (l.includes('england') || l.includes('wales') || l.includes('english')) return JURISDICTION_CONTEXT.ENGLISH_LAW;
+  if (l.includes('romani') || l.includes('bucharest') || l.includes('cluj')) return JURISDICTION_CONTEXT.ROMANIAN_LAW;
+  if (l.includes('new york') || l.includes('manhattan') || l.includes('brooklyn')) return JURISDICTION_CONTEXT.NEW_YORK;
+  if (l.includes('california') || l.includes('los angeles') || l.includes('san francisco') || l.includes('san jose')) return JURISDICTION_CONTEXT.CALIFORNIA;
+  return '';
+}
 
 // Short first-pass jurisdiction check — uses only the first 5 000 chars of the
 // document so it completes in 5-10 seconds before the full analysis starts.
@@ -194,7 +205,11 @@ export async function analyzeWithClaude(text, location, onProgress = () => {}, o
   onProgress(0, totalChunks);
 
   const isChunked = totalChunks > 1;
-  const systemPrompt = isChunked ? SYSTEM_PROMPT_CHUNK : SYSTEM_PROMPT_FULL;
+  const jurisdictionCtx = getJurisdictionContext(location);
+  const basePrompt = isChunked ? SYSTEM_PROMPT_CHUNK : SYSTEM_PROMPT_FULL;
+  const systemPromptWithContext = jurisdictionCtx
+    ? `JURISDICTION CONTEXT FOR THIS ANALYSIS:\n${jurisdictionCtx}\n\n---\n\n${basePrompt}`
+    : basePrompt;
 
   const chunkPromises = chunks.map((chunk, i) => {
     const chunkHeader = isChunked
@@ -203,7 +218,7 @@ export async function analyzeWithClaude(text, location, onProgress = () => {}, o
 
     let streamBuffer = '';
 
-    return streamAnalyzeAPI(systemPrompt, [
+    return streamAnalyzeAPI(systemPromptWithContext, [
       {
         role: 'user',
         content: `${chunkHeader}Location / Jurisdiction: ${location || 'Not specified — infer from the governing law clause if present'}\n\nLease Agreement Text:\n\n${chunk}`,
