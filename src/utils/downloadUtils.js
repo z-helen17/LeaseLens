@@ -163,6 +163,17 @@ function isBodyParagraph(cleanText) {
   return cleanText.length >= 50 && cleanText.split(/\s+/).length >= 20;
 }
 
+// Returns true if the paragraph at `paraStart` (global position in `xml`) is nested
+// inside an unclosed <w:tc> table cell — i.e. the most recent <w:tc open tag appears
+// after the most recent </w:tc> close tag in the text that precedes the paragraph.
+function isParaInTableCell(xml, paraStart) {
+  const before = xml.slice(0, paraStart);
+  const lastTcOpen = before.lastIndexOf('<w:tc');
+  if (lastTcOpen === -1) return false;
+  const lastTcClose = before.lastIndexOf('</w:tc>');
+  return lastTcClose < lastTcOpen;
+}
+
 // Inject comment markers into the paragraph described by `para` (a buildParaMap entry)
 // and return the updated full document XML. Returns null if the paragraph has no runs.
 function injectIntoParaEntry(xml, para, startTag, endTag, refRun) {
@@ -180,6 +191,34 @@ function injectIntoParaEntry(xml, para, startTag, endTag, refRun) {
     p.slice(firstRunStart, afterLastRun) + endTag + refRun +
     p.slice(afterLastRun);
   return xml.slice(0, para.start) + newPara + xml.slice(para.end);
+}
+
+// Scans upward from the matched cell to find the nearest clause-number reference in a
+// dedicated number column. DIAGNOSTIC ONLY — output goes to console.log, never to any
+// return value, display field, or data structure.
+// Returns a clause-number string (e.g. "6.1", "Article 3") or null if none is found.
+function findClauseNumberNearCell(tableRows, matchRowIndex, matchColIndex) {
+  const numberPattern = /^(?:art(?:icle)?|clause|section|pct|alin)\.?\s+[\d.]+$|^[\d][\d.]*[a-z]?$/i;
+  const isNumberCell = (text) => {
+    const t = (text || '').trim();
+    return t.length > 0 && t.length < 20 && numberPattern.test(t);
+  };
+  // Check colIndex 0 first (leftmost), then colIndex matchColIndex-1 (immediately left)
+  const candidateCols = matchColIndex > 0 ? [...new Set([0, matchColIndex - 1])] : [0];
+  let numberCol = null;
+  for (const col of candidateCols) {
+    if (tableRows.some(row => row[col] && isNumberCell(row[col].text))) {
+      numberCol = col;
+      break;
+    }
+  }
+  if (numberCol === null) return null;
+  // Same row first, then search upward
+  for (let r = matchRowIndex; r >= 0; r--) {
+    const cell = tableRows[r]?.[numberCol];
+    if (cell && isNumberCell(cell.text)) return cell.text.trim();
+  }
+  return null;
 }
 
 // Search the pre-built paragraph map for verbatimExtract (strategy 1) then
@@ -224,12 +263,14 @@ function injectCommentMarkers(xml, clauseName, commentId, verbatimExtract, debug
   // ───────────────────────────────────────────────────────────────────────────
 
   // Strategy 1: verbatim extract.
-  // Requires the matched paragraph to pass isBodyParagraph — skips headings and TOC lines.
+  // Accepts body paragraphs (isBodyParagraph) OR paragraphs inside a <w:tc> table cell
+  // regardless of length — short cell paragraphs are valid anchors for bilingual tables.
   if (verbatimExtract) {
     const normExtract = verbatimExtract.replace(/\s+/g, ' ').trim().toLowerCase();
     for (const para of paras) {
       if (!para.cleanText.toLowerCase().includes(normExtract)) continue;
-      if (!isBodyParagraph(para.cleanText)) {
+      const inTableCell = isParaInTableCell(xml, para.start);
+      if (!isBodyParagraph(para.cleanText) && !inTableCell) {
         console.log(`[LeaseLens] skip para[${para.paraIdx}] for "${clauseName}" — verbatim match but too short (${para.cleanText.split(/\s+/).length}w, ${para.cleanText.length}ch)`);
         continue;
       }
@@ -251,6 +292,70 @@ function injectCommentMarkers(xml, clauseName, commentId, verbatimExtract, debug
     if (newXml !== null) {
       console.log(`[LeaseLens] ✓ #${commentId} para[${para.paraIdx}] via name (${reason}) | "${para.cleanText.slice(0, 100)}"`);
       return { xml: newXml, matched: true };
+    }
+  }
+
+  // Strategy 3: table cell search — final fallback for table-heavy or bilingual documents.
+  // Only reached when Strategies 1 and 2 both failed. Iterates every <w:tbl> in the
+  // document, extracts rows and cells with their global positions, then does a
+  // case-insensitive substring match of verbatimExtract against each cell's text.
+  if (verbatimExtract) {
+    const normExtract = verbatimExtract.replace(/\s+/g, ' ').trim().toLowerCase();
+    const tableRegex = /<w:tbl[\s>][\s\S]*?<\/w:tbl>/gs;
+    let tableMatch;
+    while ((tableMatch = tableRegex.exec(xml)) !== null) {
+      const tableXml = tableMatch[0];
+      const tableOffset = tableMatch.index;
+
+      // Build row/cell structure; compute every offset relative to the full document XML
+      const tableRows = [];
+      const rowRegex = /<w:tr[\s>][\s\S]*?<\/w:tr>/gs;
+      let rowMatch;
+      while ((rowMatch = rowRegex.exec(tableXml)) !== null) {
+        const rowXml = rowMatch[0];
+        const rowOffset = tableOffset + rowMatch.index;
+        const rowCells = [];
+        const cellRegex = /<w:tc[\s>][\s\S]*?<\/w:tc>/gs;
+        let cellMatch;
+        let colIndex = 0;
+        while ((cellMatch = cellRegex.exec(rowXml)) !== null) {
+          const cellXml = cellMatch[0];
+          const cellOffset = rowOffset + cellMatch.index;
+          const tRegex = /<w:t(?:\s[^>]*)?>([^<]*)<\/w:t>/g;
+          let tm;
+          const parts = [];
+          while ((tm = tRegex.exec(cellXml)) !== null) {
+            parts.push(decodeXmlEntities(tm[1]));
+          }
+          const cellText = parts.join('').replace(/\s+/g, ' ').trim();
+          rowCells.push({ rowIndex: tableRows.length, colIndex, text: cellText, cellXml, cellOffset });
+          colIndex++;
+        }
+        tableRows.push(rowCells);
+      }
+
+      // Search for verbatimExtract; inject into the first viable <w:p> in the matching cell
+      for (const row of tableRows) {
+        for (const cell of row) {
+          if (!cell.text.toLowerCase().includes(normExtract)) continue;
+          const cellParaRegex = /<w:p[\s>][\s\S]*?<\/w:p>/gs;
+          let pm;
+          while ((pm = cellParaRegex.exec(cell.cellXml)) !== null) {
+            if (!/<w:r[\s>\/]/.test(pm[0])) continue; // paragraph must have at least one run
+            const para = {
+              originalXml: pm[0],
+              start: cell.cellOffset + pm.index,
+              end: cell.cellOffset + pm.index + pm[0].length,
+            };
+            const newXml = injectIntoParaEntry(xml, para, startTag, endTag, refRun);
+            if (newXml !== null) {
+              const foundNumber = findClauseNumberNearCell(tableRows, cell.rowIndex, cell.colIndex);
+              console.log('[anchor] Strategy 3 match — cell [row ' + cell.rowIndex + ', col ' + cell.colIndex + '], nearest clause ref:', foundNumber ?? 'not found');
+              return { xml: newXml, matched: true };
+            }
+          }
+        }
+      }
     }
   }
 
