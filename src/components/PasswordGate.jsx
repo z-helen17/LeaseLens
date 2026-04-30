@@ -48,7 +48,7 @@ export default function PasswordGate({ onSuccess }) {
             marginBottom: '6px',
             letterSpacing: '-0.3px',
           }}>
-            Access LeaseLens
+            Welcome to LeaseLens
           </h1>
           <p style={{ color: '#6b7280', fontSize: '14px', marginBottom: '28px' }}>
             Enter your password to continue.
@@ -103,7 +103,7 @@ export default function PasswordGate({ onSuccess }) {
             onMouseEnter={(e) => (e.target.style.opacity = '0.88')}
             onMouseLeave={(e) => (e.target.style.opacity = '1')}
           >
-            Access LeaseLens
+            Sign In
           </button>
         </div>
       </main>
