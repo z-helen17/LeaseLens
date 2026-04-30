@@ -1,5 +1,6 @@
-import { useState } from 'react';
+import { useState, useEffect } from 'react';
 import { buildDocumentGrid, findClauseNumber } from './utils/buildDocumentGrid.js';
+import PasswordGate from './components/PasswordGate.jsx';
 import UploadScreen from './components/UploadScreen.jsx';
 import LoadingScreen from './components/LoadingScreen.jsx';
 import JurisdictionScreen from './components/JurisdictionScreen.jsx';
@@ -19,6 +20,12 @@ function jurisdictionsMatch(detected, userInput) {
 }
 
 export default function App() {
+  const [accessGranted, setAccessGranted] = useState(false);
+
+  useEffect(() => {
+    if (localStorage.getItem('ll_access') === 'true') setAccessGranted(true);
+  }, []);
+
   const [screen, setScreen] = useState('upload');
   const [uploadData, setUploadData] = useState(null);
   const [extractedText, setExtractedText] = useState(null);
@@ -98,6 +105,10 @@ export default function App() {
   const handleBackToOptions = () => {
     setScreen('options');
   };
+
+  if (!accessGranted) {
+    return <PasswordGate onSuccess={() => setAccessGranted(true)} />;
+  }
 
   let content = null;
 

@@ -79,6 +79,7 @@ function isClauseNumber(text) {
   const t = text.trim();
   if (!t || t.length >= 40) return false;
   if (!/^(\d|article|section|clause|schedule|annex|exhibit|appendix)/i.test(t)) return false;
+  if (/\.\s/.test(t)) return false; // full stop mid-text = sentence, not a clause number
   if (/\b(shall|will|must|may|is|are|was|were|be|been|being|have|has|had|do|does|did)\b/i.test(t)) return false;
   return true;
 }
@@ -98,18 +99,21 @@ export function findClauseNumber(grid, ref) {
   const startRow = parseInt(m[2], 10);
   const startCol = parseInt(m[3], 10);
 
+  let lastNonEmpty = null;
+
   for (let r = startRow; r >= 0; r--) {
     // Current row: search leftward only (skip the cell itself)
     // Rows above: check same col first, then leftward
     const maxCol = r === startRow ? startCol - 1 : startCol;
     for (let c = maxCol; c >= 0; c--) {
       const cell = getCell(grid, tableIndex, r, c);
-      if (cell && isClauseNumber(cell.text)) {
-        return cell.text.trim();
+      if (cell && cell.text.trim()) {
+        if (isClauseNumber(cell.text)) return cell.text.trim();
+        lastNonEmpty = cell.text.trim();
       }
     }
   }
-  return null;
+  return lastNonEmpty;
 }
 
 /*
