@@ -161,12 +161,22 @@ function parseResponse(raw) {
     .trim();
 
   const match = cleaned.match(/\[[\s\S]*\]/);
-  if (!match) {
-    console.error('No JSON array found in response:', cleaned);
-    throw new Error('The AI returned an unexpected format. Please try again.');
+  console.log('[parse] response length:', raw.length, 'found array:', !!match);
+
+  let extracted;
+  if (match) {
+    extracted = match[0];
+    // Paranoia: if extracted somehow starts with { rather than [, wrap it
+    if (extracted.trimStart().startsWith('{')) {
+      extracted = '[' + extracted + ']';
+    }
+  } else {
+    // No array brackets found — model may have omitted the outer []. Wrap and try.
+    console.warn('[parse] no array found — wrapping entire response in []');
+    extracted = '[' + cleaned + ']';
   }
 
-  const sanitized = hardSanitizeJson(sanitizeJsonString(match[0]));
+  const sanitized = hardSanitizeJson(sanitizeJsonString(extracted));
 
   try {
     const parsed = JSON.parse(sanitized);
@@ -303,7 +313,13 @@ export async function analyzeWithClaude(text, location, onProgress = () => {}, o
 
     let streamBuffer = '';
 
-    const gridSuffix = (grid && i === 0) ? `\n\n${buildGridSummary(grid)}` : '';
+    let gridSuffix = '';
+    if (grid && i === 0) {
+      const gridSummary = buildGridSummary(grid);
+      console.log('[grid] grid object tables count:', grid?.tables?.length, 'total rows:', grid?.tables?.reduce((a, t) => a + t.rows.length, 0));
+      console.log('[grid] summary length:', gridSummary.length, 'first 200 chars:', gridSummary.slice(0, 200));
+      gridSuffix = '\n\n' + gridSummary;
+    }
 
     return streamAnalyzeAPI(systemPromptWithContext, [
       {
