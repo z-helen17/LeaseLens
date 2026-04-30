@@ -221,18 +221,104 @@ function findClauseNumberNearCell(tableRows, matchRowIndex, matchColIndex) {
   return null;
 }
 
-// Search the pre-built paragraph map for verbatimExtract (strategy 1) then
-// clauseName heuristics (strategy 2). Both strategies skip paragraphs that fail
-// the isBodyParagraph check — headings, TOC lines, and cover-page text are excluded.
-// If neither strategy finds a qualifying paragraph, returns matched:false with no anchor.
-// debugIdx: 0-based clause index; pass for first 5 clauses to enable diagnostic output.
-// Returns { xml: string, matched: boolean }.
-function injectCommentMarkers(xml, clauseName, commentId, verbatimExtract, debugIdx) {
+// Anchor a comment to a specific table cell using its grid coordinate (e.g. "t0r5c1").
+// Returns the updated document XML string, or null if the cell cannot be located.
+function anchorByCellRef(docXml, cellRef, commentId) {
+  const match = cellRef.match(/^t(\d+)r(\d+)c(\d+)$/);
+  if (!match) return null;
+  const [, tIdx, rIdx, cIdx] = match.map(Number);
+
   const startTag = `<w:commentRangeStart w:id="${commentId}"/>`;
   const endTag   = `<w:commentRangeEnd w:id="${commentId}"/>`;
   const refRun   =
     `<w:r><w:rPr><w:rStyle w:val="CommentReference"/></w:rPr>` +
     `<w:commentReference w:id="${commentId}"/></w:r>`;
+
+  // Find the tIdx-th <w:tbl>
+  let tableCount = 0;
+  let tableStart = -1;
+  let tableEnd   = -1;
+  const tableRe  = /<w:tbl[\s>]/g;
+  let tm;
+  while ((tm = tableRe.exec(docXml)) !== null) {
+    if (tableCount === tIdx) {
+      tableStart = tm.index;
+      let depth = 1;
+      let pos = tm.index + tm[0].length;
+      while (pos < docXml.length && depth > 0) {
+        const next = docXml.indexOf('<', pos);
+        if (next === -1) break;
+        if (docXml.startsWith('<w:tbl', next) && !docXml.startsWith('</w:tbl', next)) depth++;
+        else if (docXml.startsWith('</w:tbl>', next)) depth--;
+        pos = next + 1;
+      }
+      tableEnd = pos + 7; // length of '</w:tbl>'
+      break;
+    }
+    tableCount++;
+  }
+  if (tableStart === -1) return null;
+  const tableXml = docXml.slice(tableStart, tableEnd);
+
+  // Find the rIdx-th <w:tr>
+  const rowMatches = [...tableXml.matchAll(/<w:tr[\s>]/gs)];
+  if (rIdx >= rowMatches.length) return null;
+  const rowStart = rowMatches[rIdx].index;
+  const rowEnd   = tableXml.indexOf('</w:tr>', rowStart) + 7;
+  const rowXml   = tableXml.slice(rowStart, rowEnd);
+
+  // Find the cIdx-th <w:tc>
+  const cellMatches = [...rowXml.matchAll(/<w:tc[\s>]/gs)];
+  if (cIdx >= cellMatches.length) return null;
+  const cellStart = cellMatches[cIdx].index;
+  const cellEnd   = rowXml.indexOf('</w:tc>', cellStart) + 7;
+  const cellXml   = rowXml.slice(cellStart, cellEnd);
+
+  // First <w:p> in the cell that contains at least one run
+  const parasInCell = [...cellXml.matchAll(/<w:p[\s>][\s\S]*?<\/w:p>/gs)];
+  let targetPara    = null;
+  let targetParaXml = null;
+  for (const pm of parasInCell) {
+    if (/<w:r[\s>\/]/.test(pm[0])) {
+      targetPara    = pm;
+      targetParaXml = pm[0];
+      break;
+    }
+  }
+  if (!targetPara) return null;
+
+  // Compute absolute position of this paragraph within docXml.
+  // Each offset is relative to the slice it was matched against, so they sum correctly.
+  const cellAbsStart = tableStart + rowStart + cellStart;
+  const paraAbsStart = cellAbsStart + targetPara.index;
+  const paraAbsEnd   = paraAbsStart + targetParaXml.length;
+
+  const paraEntry = { start: paraAbsStart, end: paraAbsEnd, originalXml: targetParaXml };
+  return injectIntoParaEntry(docXml, paraEntry, startTag, endTag, refRun);
+}
+
+// Search the pre-built paragraph map for verbatimExtract (strategy 1) then
+// clauseName heuristics (strategy 2). Both strategies skip paragraphs that fail
+// the isBodyParagraph check — headings, TOC lines, and cover-page text are excluded.
+// If neither strategy finds a qualifying paragraph, returns matched:false with no anchor.
+// debugIdx: 0-based clause index; pass for first 5 clauses to enable diagnostic output.
+// Returns { xml: string, matched: boolean, via: 'cellRef'|'string'|null }.
+function injectCommentMarkers(xml, clauseName, commentId, verbatimExtract, debugIdx, cellRef) {
+  const startTag = `<w:commentRangeStart w:id="${commentId}"/>`;
+  const endTag   = `<w:commentRangeEnd w:id="${commentId}"/>`;
+  const refRun   =
+    `<w:r><w:rPr><w:rStyle w:val="CommentReference"/></w:rPr>` +
+    `<w:commentReference w:id="${commentId}"/></w:r>`;
+
+  // Strategy 0 — cellRef coordinate anchor (most reliable; used when model returns grid coordinates)
+  if (cellRef) {
+    const anchored = anchorByCellRef(xml, cellRef, commentId);
+    if (anchored !== null) {
+      console.log(`[LeaseLens] ✓ #${commentId} via cellRef "${cellRef}"`);
+      return { xml: anchored, matched: true, via: 'cellRef' };
+    }
+    console.warn(`[LeaseLens] cellRef "${cellRef}" failed — falling back to string search`);
+  }
 
   const paras = buildParaMap(xml);
 
@@ -277,7 +363,7 @@ function injectCommentMarkers(xml, clauseName, commentId, verbatimExtract, debug
       const newXml = injectIntoParaEntry(xml, para, startTag, endTag, refRun);
       if (newXml !== null) {
         console.log(`[LeaseLens] ✓ #${commentId} para[${para.paraIdx}] via verbatimExtract | "${para.cleanText.slice(0, 100)}"`);
-        return { xml: newXml, matched: true };
+        return { xml: newXml, matched: true, via: 'string' };
       }
     }
   }
@@ -291,7 +377,7 @@ function injectCommentMarkers(xml, clauseName, commentId, verbatimExtract, debug
     const newXml = injectIntoParaEntry(xml, para, startTag, endTag, refRun);
     if (newXml !== null) {
       console.log(`[LeaseLens] ✓ #${commentId} para[${para.paraIdx}] via name (${reason}) | "${para.cleanText.slice(0, 100)}"`);
-      return { xml: newXml, matched: true };
+      return { xml: newXml, matched: true, via: 'string' };
     }
   }
 
@@ -351,7 +437,7 @@ function injectCommentMarkers(xml, clauseName, commentId, verbatimExtract, debug
             if (newXml !== null) {
               const foundNumber = findClauseNumberNearCell(tableRows, cell.rowIndex, cell.colIndex);
               console.log('[anchor] Strategy 3 match — cell [row ' + cell.rowIndex + ', col ' + cell.colIndex + '], nearest clause ref:', foundNumber ?? 'not found');
-              return { xml: newXml, matched: true };
+              return { xml: newXml, matched: true, via: 'string' };
             }
           }
         }
@@ -361,7 +447,7 @@ function injectCommentMarkers(xml, clauseName, commentId, verbatimExtract, debug
 
   // No qualifying match — do NOT anchor to any paragraph.
   console.warn(`[LeaseLens] NO MATCH "${clauseName}" | extract="${verbatimExtract || '(none)'}" | body paras=${paras.filter(p => isBodyParagraph(p.cleanText)).length}/${paras.length}`);
-  return { xml, matched: false };
+  return { xml, matched: false, via: null };
 }
 
 // ── Unmatched clauses DOCX ────────────────────────────────────────────────────
@@ -448,14 +534,18 @@ async function downloadAnnotatedDocx(filteredClauses, file) {
     const commentElements = [];
     const unmatchedClauses = [];
     let injected = 0;
+    let cellRefCount = 0;
+    let stringCount = 0;
 
     clausesWithChanges.forEach((clause, idx) => {
       const commentId = idBase + idx;
-      const result = injectCommentMarkers(docXml, clause.name, commentId, clause.verbatimExtract, idx < 5 ? idx : undefined);
+      const result = injectCommentMarkers(docXml, clause.name, commentId, clause.verbatimExtract, idx < 5 ? idx : undefined, clause.cellRef);
 
       if (result.matched) {
         docXml = result.xml;
         injected++;
+        if (result.via === 'cellRef') cellRefCount++;
+        else stringCount++;
         const biasLabel = clause.bias === 'x'
           ? 'Unclear/Error'
           : `Bias ${clause.bias} — ${BIAS_LABELS[clause.bias]}`;
@@ -473,7 +563,7 @@ async function downloadAnnotatedDocx(filteredClauses, file) {
       }
     });
 
-    console.log(`[LeaseLens] comment injection: ${injected}/${clausesWithChanges.length} clauses matched`);
+    console.log(`[LeaseLens] comment injection: ${cellRefCount} by coordinate, ${stringCount} by text match, ${clausesWithChanges.length - injected} unmatched`);
 
     // Build or append to comments.xml (only if at least one comment was injected)
     const existingCommentsFile = zip.file('word/comments.xml');
@@ -524,14 +614,14 @@ async function downloadAnnotatedDocx(filteredClauses, file) {
     });
 
     saveBlob(blob, `${baseName(file.name)}_leaselens_annotated.docx`);
-    console.log('[LeaseLens] download triggered, matched', commentElements.length, 'of', clausesWithChanges.length, 'clauses');
+    console.log(`[LeaseLens] download triggered — ${cellRefCount} by coordinate, ${stringCount} by text match, ${unmatchedClauses.length} unmatched of ${clausesWithChanges.length}`);
 
     if (unmatchedClauses.length > 0) {
       await downloadUnmatchedDocx(unmatchedClauses);
       alert(
-        `${unmatchedClauses.length} clause(s) could not be placed directly in the document. ` +
-        `They have been saved in a separate file: LeaseLens-Unmatched-Comments.docx — ` +
-        `please review that file alongside the annotated lease.`
+        `${cellRefCount} clause(s) anchored by coordinate, ${stringCount} by text match. ` +
+        `${unmatchedClauses.length} clause(s) could not be anchored — ` +
+        `saved in LeaseLens-Unmatched-Comments.docx.`
       );
     }
   } catch (err) {
