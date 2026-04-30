@@ -1,5 +1,5 @@
 import { useState, useEffect } from 'react';
-import { buildDocumentGrid, findClauseNumber } from './utils/buildDocumentGrid.js';
+import { buildDocumentGrid, findClauseNumber, findRowByText } from './utils/buildDocumentGrid.js';
 import PasswordGate from './components/PasswordGate.jsx';
 import UploadScreen from './components/UploadScreen.jsx';
 import LoadingScreen from './components/LoadingScreen.jsx';
@@ -77,12 +77,15 @@ export default function App() {
 
   const handleAnalysisComplete = (result) => {
     const processedClauses = result.map(clause => {
-      if (!grid || !clause.cellRef) return clause;
       const alreadyNumbered = /^(\d|Article|Section|Clause|Schedule|Annex|Exhibit|Appendix)/i.test(clause.name?.trim() || '');
       if (alreadyNumbered) return clause;
-      const clauseNumber = findClauseNumber(grid, clause.cellRef);
+      if (!grid || !clause.verbatimExtract) return clause;
+      const rowMatch = findRowByText(grid, clause.verbatimExtract);
+      if (!rowMatch) return clause;
+      const effectiveCellRef = clause.cellRef || rowMatch.ref;
+      const clauseNumber = findClauseNumber(grid, effectiveCellRef);
       if (!clauseNumber) return clause;
-      return { ...clause, name: `${clauseNumber} — ${clause.name}` };
+      return { ...clause, name: `${clauseNumber} — ${clause.name}`, cellRef: effectiveCellRef };
     });
     setClauses(processedClauses);
     setScreen('options');

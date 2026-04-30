@@ -116,6 +116,24 @@ export function findClauseNumber(grid, ref) {
   return lastNonEmpty;
 }
 
+export function findRowByText(grid, searchText) {
+  if (!grid || !searchText || searchText.length < 10) return null;
+
+  const normalise = s => s.toLowerCase().replace(/\s+/g, ' ').trim();
+  const needle = normalise(searchText.slice(0, 60));
+
+  for (const table of grid.tables) {
+    for (const row of table.rows) {
+      for (const cell of row.cells) {
+        if (normalise(cell.text).includes(needle)) {
+          return { tableIndex: table.tableIndex, rowIndex: row.rowIndex, colIndex: cell.colIndex, ref: cell.ref };
+        }
+      }
+    }
+  }
+  return null;
+}
+
 /*
   Example output shape for a 3-table document:
 
