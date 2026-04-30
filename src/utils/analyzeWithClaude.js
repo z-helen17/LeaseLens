@@ -138,6 +138,18 @@ function sanitizeJsonString(raw) {
   );
 }
 
+// Additional JSON hardening applied after sanitizeJsonString, before JSON.parse.
+// Catches issues that survive the initial normalization: stray control characters,
+// unescaped backslashes from Romanian/special-character documents, residual smart punctuation.
+function hardSanitizeJson(str) {
+  return str
+    .replace(/['']/g, "'")          // curly single quotes (belt-and-suspenders)
+    .replace(/[""]/g, '"')           // curly double quotes
+    .replace(/[–—]/g, '-')           // en/em dashes
+    .replace(/[\x00-\x08\x0B\x0C\x0E-\x1F]/g, '')  // control chars except \t \n \r
+    .replace(/\\(?!["\\/bfnrtu])/g, '\\\\');          // fix unescaped backslashes
+}
+
 function parseResponse(raw) {
   // Normalise curly quotes, smart dashes, and strip any code fences before extraction.
   const cleaned = raw
@@ -154,7 +166,7 @@ function parseResponse(raw) {
     throw new Error('The AI returned an unexpected format. Please try again.');
   }
 
-  const sanitized = sanitizeJsonString(match[0]);
+  const sanitized = hardSanitizeJson(sanitizeJsonString(match[0]));
 
   try {
     const parsed = JSON.parse(sanitized);
@@ -231,13 +243,25 @@ async function streamAnalyzeAPI(system, messages, onToken) {
   return fullText;
 }
 
+// Sanitise cell text before injecting into the grid summary prompt.
+// Applied per-cell (before the c0:[...] format wrapper is added) so that the
+// [REDACTED] step only fires on embedded bracket content, not format delimiters.
+function sanitiseGridText(text) {
+  return text
+    .replace(/[‘’]/g, "'")        // curly single quotes → straight
+    .replace(/[“”]/g, '"')         // curly double quotes → straight
+    .replace(/[–—]/g, '-')         // en/em dashes → hyphens
+    .replace(/\[[^\[\]]*\]/g, '[REDACTED]')  // embedded square bracket content
+    .replace(/[^\x20-\x7E]/g, '');           // strip remaining non-ASCII printable chars
+}
+
 function buildGridSummary(grid) {
   const lines = ['DOCUMENT GRID (use these coordinates for cellRef):'];
   for (const table of grid.tables) {
     for (const row of table.rows) {
       const nonEmpty = row.cells.filter(c => c.text.trim());
       if (nonEmpty.length === 0) continue;
-      const cellParts = nonEmpty.map(c => `c${c.colIndex}:[${c.text.slice(0, 60)}]`);
+      const cellParts = nonEmpty.map(c => `c${c.colIndex}:[${sanitiseGridText(c.text.slice(0, 60))}]`);
       lines.push(`t${table.tableIndex}r${row.rowIndex}: ${cellParts.join(' | ')}`);
     }
   }
