@@ -8,7 +8,7 @@ import { analyzeWithClaude, detectJurisdiction } from '../utils/analyzeWithClaud
 // confirmedJurisdiction overrides location for the analysis API call.
 export default function LoadingScreen({
   file, location, onComplete, onError,
-  extractedText, confirmedJurisdiction, onReadyToAnalyze, onLogoClick,
+  extractedText, confirmedJurisdiction, onReadyToAnalyze, onLogoClick, grid,
 }) {
   const [apiDone, setApiDone] = useState(false);
   const [streamedCount, setStreamedCount] = useState(0);
@@ -42,7 +42,7 @@ export default function LoadingScreen({
         const jurisdiction = confirmedJurisdiction || location;
         const clauses = await analyzeWithClaude(text, jurisdiction, () => {}, (clause) => {
           if (!cancelled) setStreamedCount(c => c + 1);
-        });
+        }, grid);
         if (cancelled) return;
         clausesRef.current = clauses;
         setApiDone(true);

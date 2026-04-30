@@ -1,4 +1,5 @@
 import { useState } from 'react';
+import { buildDocumentGrid, findClauseNumber } from './utils/buildDocumentGrid.js';
 import UploadScreen from './components/UploadScreen.jsx';
 import LoadingScreen from './components/LoadingScreen.jsx';
 import JurisdictionScreen from './components/JurisdictionScreen.jsx';
@@ -26,6 +27,7 @@ export default function App() {
   const [clauses, setClauses] = useState([]);
   const [option, setOption] = useState(null);
   const [error, setError] = useState(null);
+  const [grid, setGrid] = useState(null);
 
   const handleUpload = (data) => {
     setUploadData(data);
@@ -38,9 +40,21 @@ export default function App() {
 
   // Called by LoadingScreen (detection mode) once text is extracted and
   // jurisdiction is detected.
-  const handleReadyToAnalyze = (text, detected) => {
+  const handleReadyToAnalyze = async (text, detected) => {
     setExtractedText(text);
     setDetectedJurisdiction(detected);
+
+    let newGrid = null;
+    if (uploadData.file.name.toLowerCase().endsWith('.docx')) {
+      try {
+        const ab = await uploadData.file.arrayBuffer();
+        newGrid = await buildDocumentGrid(ab);
+      } catch {
+        // Grid build failure is non-fatal; proceed without grid
+      }
+    }
+    setGrid(newGrid);
+
     if (jurisdictionsMatch(detected, uploadData?.location)) {
       setConfirmedJurisdiction(detected || uploadData?.location || '');
       setScreen('analyzing');
@@ -78,6 +92,7 @@ export default function App() {
     setClauses([]);
     setOption(null);
     setError(null);
+    setGrid(null);
   };
 
   const handleBackToOptions = () => {
@@ -116,6 +131,7 @@ export default function App() {
         location={uploadData.location}
         extractedText={extractedText}
         confirmedJurisdiction={confirmedJurisdiction}
+        grid={grid}
         onComplete={handleAnalysisComplete}
         onError={handleAnalysisError}
         onLogoClick={handleStartOver}

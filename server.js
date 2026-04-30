@@ -13,10 +13,29 @@ if (!process.env.ANTHROPIC_API_KEY) {
 const client = new Anthropic({ apiKey: process.env.ANTHROPIC_API_KEY });
 
 app.post('/api/analyze', async (req, res) => {
-  const { model, max_tokens, system, messages } = req.body;
+  const { system, messages, maxTokens, model } = req.body;
+
   try {
-    const response = await client.messages.create({ model, max_tokens, system, messages });
-    res.json(response);
+    res.setHeader('Content-Type', 'text/event-stream');
+    res.setHeader('Cache-Control', 'no-cache');
+    res.setHeader('Connection', 'keep-alive');
+
+    const streamParams = {
+      model: model || 'claude-sonnet-4-6',
+      max_tokens: maxTokens || 32000,
+      messages,
+    };
+    if (system) streamParams.system = system;
+
+    const stream = client.messages.stream(streamParams);
+
+    stream.on('text', (text) => {
+      res.write(`data: ${JSON.stringify({ text })}\n\n`);
+    });
+
+    await stream.finalMessage();
+    res.write('data: [DONE]\n\n');
+    res.end();
   } catch (err) {
     console.error('Anthropic API error:', err.message);
     res.status(500).json({ error: err.message });

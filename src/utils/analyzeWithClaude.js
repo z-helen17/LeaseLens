@@ -1,10 +1,4 @@
-import Anthropic from '@anthropic-ai/sdk';
 import { JURISDICTION_CONTEXT } from './jurisdictionContext.js';
-
-const client = new Anthropic({
-  apiKey: import.meta.env.VITE_ANTHROPIC_API_KEY,
-  dangerouslyAllowBrowser: true,
-});
 
 const SYSTEM_PROMPT_FULL = `You are a commercial real estate lawyer analysing a lease agreement for clause bias. You will be given the full text of a lease. Do the following in order:
 
@@ -15,6 +9,7 @@ For scoring, use this mapping: 1-20=bias 1, 21-40=bias 2, 41-60=bias 3, 61-80=bi
 Be concise: keep each "note" field to a maximum of 2 sentences, and each "change" field to a maximum of 1 sentence.
 If the document is bilingual or contains text in multiple languages, analyse the English text only and propose changes in English only. Do not propose rewrites in other languages. The only exception is where there is a direct inconsistency between the two language versions (e.g. different numbers, names or defined terms) — in that case flag it as an 'x' drafting error and note the inconsistency clearly.
 Your entire response must be valid JSON only. Do not include markdown backticks, code fences, or any text outside the JSON array. All string values must use only standard ASCII apostrophes and quotation marks. Do not use curly quotes, special dashes, or non-ASCII punctuation inside JSON strings. If you need to include a quote inside a string value, escape it with a backslash.
+The document has been pre-processed into a grid. Table cells are identified by coordinates in the format t{tableIndex}r{rowIndex}c{colIndex}. When you identify a clause in a table cell, record its exact grid coordinate as cellRef. This coordinate will be used to anchor comments in the Word document — it must be precise. For clauses in free-flowing body text outside tables, set cellRef to null.
 Return ONLY a valid JSON array with no other text, markdown or backticks. Each element must have these exact fields:
 
 name: string — CRITICAL RULE: You MUST prefix every clause name with its clause number exactly as it appears in the document. Format: "6.3 — Clause Name" or "6.3.1 — Clause Name". If a provision is in a schedule, prefix with the schedule reference e.g. "Schedule 2 — Clause Name". Never return a clause name without its document reference number. If a clause genuinely has no number or schedule reference, use the section heading as-is.
@@ -24,7 +19,8 @@ note: string (explanation of why this clause leans this way, referencing jurisdi
 change: string or null (precise word-level change needed — what to replace with what. No style suggestions. Null for neutral clauses.)
 genClause: string or null (full drafted replacement clause text using the agreement's own definitions and language, only when the change requires a new mechanism. Null otherwise.)
 lenderFlag: boolean (true if this clause is relevant to a landlord's lender)
-verbatimExtract: string — exactly 10-15 consecutive words copied verbatim from the body text of this clause (not the heading, not paraphrased — exact words as they appear in the document, used to locate the clause in the source file)`;
+verbatimExtract: string — exactly 10-15 consecutive words copied verbatim from the body text of this clause (not the heading, not paraphrased — exact words as they appear in the document, used to locate the clause in the source file)
+cellRef: the grid coordinate reference of the cell where this clause text was found, in the format 't{n}r{n}c{n}' (e.g. 't0r5c1'). Output null for clauses found in body paragraphs outside tables.`;
 
 const SYSTEM_PROMPT_CHUNK = `You are a commercial real estate lawyer analysing lease agreement clauses for bias. You will be given a portion of a lease. Analyse ONLY the clauses present in this portion and return your results immediately — do NOT wait for additional parts, do NOT ask for more context, do NOT say the document is incomplete.
 
@@ -33,6 +29,7 @@ Score mapping: 1-20=bias 1, 21-40=bias 2, 41-60=bias 3, 61-80=bias 4, 81-100=bia
 Be concise: keep each "note" field to a maximum of 2 sentences, and each "change" field to a maximum of 1 sentence.
 If the document is bilingual or contains text in multiple languages, analyse the English text only and propose changes in English only. Do not propose rewrites in other languages. The only exception is where there is a direct inconsistency between the two language versions (e.g. different numbers, names or defined terms) — in that case flag it as an 'x' drafting error and note the inconsistency clearly.
 Your entire response must be valid JSON only. Do not include markdown backticks, code fences, or any text outside the JSON array. All string values must use only standard ASCII apostrophes and quotation marks. Do not use curly quotes, special dashes, or non-ASCII punctuation inside JSON strings. If you need to include a quote inside a string value, escape it with a backslash.
+The document has been pre-processed into a grid. Table cells are identified by coordinates in the format t{tableIndex}r{rowIndex}c{colIndex}. When you identify a clause in a table cell, record its exact grid coordinate as cellRef. This coordinate will be used to anchor comments in the Word document — it must be precise. For clauses in free-flowing body text outside tables, set cellRef to null.
 Return ONLY a valid JSON array with no other text, markdown or backticks. Each element must have these exact fields:
 
 name: string — CRITICAL RULE: You MUST prefix every clause name with its clause number exactly as it appears in the document. Format: "6.3 — Clause Name" or "6.3.1 — Clause Name". If a provision is in a schedule, prefix with the schedule reference e.g. "Schedule 2 — Clause Name". Never return a clause name without its document reference number. If a clause genuinely has no number or schedule reference, use the section heading as-is.
@@ -42,7 +39,8 @@ note: string (explanation of why this clause leans this way, referencing jurisdi
 change: string or null (precise word-level change needed — what to replace with what. No style suggestions. Null for neutral clauses.)
 genClause: string or null (full drafted replacement clause text using the agreement's own definitions and language, only when the change requires a new mechanism. Null otherwise.)
 lenderFlag: boolean (true if this clause is relevant to a landlord's lender)
-verbatimExtract: string — exactly 10-15 consecutive words copied verbatim from the body text of this clause (not the heading, not paraphrased — exact words as they appear in the document, used to locate the clause in the source file)`;
+verbatimExtract: string — exactly 10-15 consecutive words copied verbatim from the body text of this clause (not the heading, not paraphrased — exact words as they appear in the document, used to locate the clause in the source file)
+cellRef: the grid coordinate reference of the cell where this clause text was found, in the format 't{n}r{n}c{n}' (e.g. 't0r5c1'). Output null for clauses found in body paragraphs outside tables.`;
 
 function getJurisdictionContext(location) {
   if (!location) return '';
@@ -59,18 +57,44 @@ function getJurisdictionContext(location) {
 // Returns the detected jurisdiction string, or '' if nothing is found.
 export async function detectJurisdiction(text) {
   try {
-    const message = await client.messages.create({
-      model: 'claude-haiku-4-5-20251001',
-      max_tokens: 80,
-      messages: [{
-        role: 'user',
-        content:
-          'Read this document extract and identify the governing law or jurisdiction clause if present. ' +
-          'Return JSON only: { "detected": "jurisdiction name or null" }\n\n' +
-          text.slice(0, 5000),
-      }],
+    const response = await fetch('/api/analyze', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({
+        model: 'claude-haiku-4-5-20251001',
+        messages: [{
+          role: 'user',
+          content:
+            'Read this document extract and identify the governing law or jurisdiction clause if present. ' +
+            'Return JSON only: { "detected": "jurisdiction name or null" }\n\n' +
+            text.slice(0, 5000),
+        }],
+        maxTokens: 80,
+      }),
     });
-    const raw = message.content[0].text.trim();
+    if (!response.ok) return '';
+
+    const reader = response.body.getReader();
+    const decoder = new TextDecoder();
+    let raw = '';
+
+    while (true) {
+      const { done, value } = await reader.read();
+      if (done) break;
+      const chunk = decoder.decode(value, { stream: true });
+      const lines = chunk.split('\n');
+      for (const line of lines) {
+        if (line.startsWith('data: ')) {
+          const data = line.slice(6);
+          if (data === '[DONE]') break;
+          try {
+            const parsed = JSON.parse(data);
+            if (parsed.text) raw += parsed.text;
+          } catch (_) {}
+        }
+      }
+    }
+
     // Strip markdown fences the model might add despite being told not to
     const cleaned = raw.replace(/```json/gi, '').replace(/```/g, '').trim();
     const parsed = JSON.parse(cleaned);
@@ -170,26 +194,63 @@ function hashText(text) {
 }
 
 async function streamAnalyzeAPI(system, messages, onToken) {
+  const response = await fetch('/api/analyze', {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ system, messages, maxTokens: 32000 })
+  });
+
+  if (!response.ok) throw new Error(`API error: ${response.status}`);
+
+  const reader = response.body.getReader();
+  const decoder = new TextDecoder();
   let fullText = '';
-  let tokenCount = 0;
-  const stream = client.messages.stream({
-    model: 'claude-sonnet-4-6',
-    max_tokens: 32000,
-    system,
-    messages,
-  });
-  stream.on('text', (text) => {
-    tokenCount++;
-    fullText += text;
-    onToken(text);
-  });
-  await stream.finalMessage();
+
+  while (true) {
+    const { done, value } = await reader.read();
+    if (done) break;
+
+    const chunk = decoder.decode(value, { stream: true });
+    const lines = chunk.split('\n');
+
+    for (const line of lines) {
+      if (line.startsWith('data: ')) {
+        const data = line.slice(6);
+        if (data === '[DONE]') break;
+        try {
+          const parsed = JSON.parse(data);
+          if (parsed.text) {
+            fullText += parsed.text;
+            onToken(parsed.text);
+          }
+        } catch (_) {}
+      }
+    }
+  }
+
   return fullText;
+}
+
+function buildGridSummary(grid) {
+  const lines = ['DOCUMENT GRID (use these coordinates for cellRef):'];
+  for (const table of grid.tables) {
+    for (const row of table.rows) {
+      const nonEmpty = row.cells.filter(c => c.text.trim());
+      if (nonEmpty.length === 0) continue;
+      const cellParts = nonEmpty.map(c => `c${c.colIndex}:[${c.text.slice(0, 60)}]`);
+      lines.push(`t${table.tableIndex}r${row.rowIndex}: ${cellParts.join(' | ')}`);
+    }
+  }
+  let summary = lines.join('\n');
+  if (summary.length > 8000) {
+    summary = summary.slice(0, 8000) + '\n... [grid truncated]';
+  }
+  return summary;
 }
 
 // onProgress(currentChunkNumber, totalChunks) — called before each API call (1-indexed)
 // onClause(clause) — called each time a complete clause object is parsed mid-stream
-export async function analyzeWithClaude(text, location, onProgress = () => {}, onClause = () => {}) {
+export async function analyzeWithClaude(text, location, onProgress = () => {}, onClause = () => {}, grid = null) {
   const cacheKey = hashText(text);
   try {
     const cached = localStorage.getItem(cacheKey);
@@ -218,10 +279,12 @@ export async function analyzeWithClaude(text, location, onProgress = () => {}, o
 
     let streamBuffer = '';
 
+    const gridSuffix = (grid && i === 0) ? `\n\n${buildGridSummary(grid)}` : '';
+
     return streamAnalyzeAPI(systemPromptWithContext, [
       {
         role: 'user',
-        content: `${chunkHeader}Location / Jurisdiction: ${location || 'Not specified — infer from the governing law clause if present'}\n\nLease Agreement Text:\n\n${chunk}`,
+        content: `${chunkHeader}Location / Jurisdiction: ${location || 'Not specified — infer from the governing law clause if present'}\n\nLease Agreement Text:\n\n${chunk}${gridSuffix}`,
       },
     ], (token) => {
       streamBuffer += token;
