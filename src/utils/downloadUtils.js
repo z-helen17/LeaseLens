@@ -267,12 +267,42 @@ function anchorByCellRef(docXml, cellRef, commentId) {
   const rowEnd   = tableXml.indexOf('</w:tr>', rowStart) + 7;
   const rowXml   = tableXml.slice(rowStart, rowEnd);
 
-  // Find the cIdx-th <w:tc>
+  // Find the cIdx-th <w:tc>, shifting right if it looks like a clause number cell
   const cellMatches = [...rowXml.matchAll(/<w:tc[\s>]/gs)];
   if (cIdx >= cellMatches.length) return null;
-  const cellStart = cellMatches[cIdx].index;
-  const cellEnd   = rowXml.indexOf('</w:tc>', cellStart) + 7;
-  const cellXml   = rowXml.slice(cellStart, cellEnd);
+
+  const extractCellText = (cx) => {
+    const parts = [];
+    const re = /<w:t(?:\s[^>]*)?>([^<]*)<\/w:t>/g;
+    let m;
+    while ((m = re.exec(cx)) !== null) { if (m[1]) parts.push(m[1]); }
+    return parts.join('').replace(/\s+/g, ' ').trim();
+  };
+  const isNumberCell = (text) =>
+    text.length < 20 && /^[\d\.\s\(\)Article Section Clause]+$/i.test(text);
+
+  const origCellStart = cellMatches[cIdx].index;
+  const origCellEnd   = rowXml.indexOf('</w:tc>', origCellStart) + 7;
+  const origCellXml   = rowXml.slice(origCellStart, origCellEnd);
+
+  let cellStart = origCellStart;
+  let cellEnd   = origCellEnd;
+  let cellXml   = origCellXml;
+
+  if (isNumberCell(extractCellText(origCellXml))) {
+    for (let shift = 1; shift <= 2; shift++) {
+      const nc = cIdx + shift;
+      if (nc >= cellMatches.length) break;
+      const cs = cellMatches[nc].index;
+      const ce = rowXml.indexOf('</w:tc>', cs) + 7;
+      const cx = rowXml.slice(cs, ce);
+      if (!isNumberCell(extractCellText(cx))) {
+        cellStart = cs; cellEnd = ce; cellXml = cx;
+        break;
+      }
+    }
+    // if no non-number cell found within 2 shifts, original cell is used (already set)
+  }
 
   // First <w:p> in the cell that contains at least one run
   const parasInCell = [...cellXml.matchAll(/<w:p[\s>][\s\S]*?<\/w:p>/gs)];

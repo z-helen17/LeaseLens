@@ -76,7 +76,15 @@ export default function App() {
   };
 
   const handleAnalysisComplete = (result) => {
-    setClauses(result);
+    const processedClauses = result.map(clause => {
+      if (!grid || !clause.cellRef) return clause;
+      const alreadyNumbered = /^(\d|Article|Section|Clause|Schedule|Annex|Exhibit|Appendix)/i.test(clause.name?.trim() || '');
+      if (alreadyNumbered) return clause;
+      const clauseNumber = findClauseNumber(grid, clause.cellRef);
+      if (!clauseNumber) return clause;
+      return { ...clause, name: `${clauseNumber} — ${clause.name}` };
+    });
+    setClauses(processedClauses);
     setScreen('options');
   };
 
