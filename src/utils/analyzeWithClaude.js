@@ -14,6 +14,7 @@ Each clause packet is prefixed with a label like [CLAUSE 4.1 | textRef:t4r12c1 |
 - textRef is the grid coordinate of the cell containing the clause text — use it as cellRef
 - numberRef is the coordinate where the clause number appears — echo it exactly as numberRef
 - If a packet has [CLAUSE UNKNOWN | textRef:...], use the textRef as cellRef and set numberRef to null
+CRITICAL: The textRef and numberRef coordinates (e.g. 't4r199c2') are internal metadata — they must NEVER appear in the note, change, genClause, or name fields of your output. Never reference grid coordinates in your analysis text.
 Return ONLY a valid JSON array with no other text, markdown or backticks. Each element must have these exact fields:
 
 name: string — CRITICAL RULE: You MUST prefix every clause name with its clause number exactly as it appears in the document. Format: "6.3 — Clause Name" or "6.3.1 — Clause Name". If a provision is in a schedule, prefix with the schedule reference e.g. "Schedule 2 — Clause Name". Never return a clause name without its document reference number. If a clause genuinely has no number or schedule reference, use the section heading as-is.
@@ -38,6 +39,7 @@ Each clause packet is prefixed with a label like [CLAUSE 4.1 | textRef:t4r12c1 |
 - textRef is the grid coordinate of the cell containing the clause text — use it as cellRef
 - numberRef is the coordinate where the clause number appears — echo it exactly as numberRef
 - If a packet has [CLAUSE UNKNOWN | textRef:...], use the textRef as cellRef and set numberRef to null
+CRITICAL: The textRef and numberRef coordinates (e.g. 't4r199c2') are internal metadata — they must NEVER appear in the note, change, genClause, or name fields of your output. Never reference grid coordinates in your analysis text.
 Return ONLY a valid JSON array with no other text, markdown or backticks. Each element must have these exact fields:
 
 name: string — CRITICAL RULE: You MUST prefix every clause name with its clause number exactly as it appears in the document. Format: "6.3 — Clause Name" or "6.3.1 — Clause Name". If a provision is in a schedule, prefix with the schedule reference e.g. "Schedule 2 — Clause Name". Never return a clause name without its document reference number. If a clause genuinely has no number or schedule reference, use the section heading as-is.

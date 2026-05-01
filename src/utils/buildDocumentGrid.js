@@ -81,28 +81,39 @@ function advanceNumState(numId, ilvl, abstractNumMap, numMap, numberingState) {
   if (!level || level.numFmt === 'bullet' || level.numFmt === 'none') return null;
 
   if (!numberingState.has(numId)) {
-    const init = [];
-    for (let i = 0; i <= 8; i++) {
-      const l = levels[i];
-      init.push(l ? l.start - 1 : 0);
-    }
-    numberingState.set(numId, init);
+    numberingState.set(numId, []); // null = never advanced for that level
   }
   const state = numberingState.get(numId);
-  while (state.length <= ilvl) {
-    const l = levels[state.length];
-    state.push(l ? l.start - 1 : 0);
+  while (state.length <= ilvl) state.push(null);
+
+  // Parent levels that have never been advanced get pre-initialised to their
+  // start value so that e.g. ilvl=1 first seen before ilvl=0 produces "1.1"
+  // rather than "0.1" (the bug case where a sub-clause style appears before
+  // any top-level heading for this numId).
+  for (let i = 0; i < ilvl; i++) {
+    if (state[i] === null) {
+      const l = levels[i];
+      state[i] = l ? l.start : 1;
+    }
+  }
+
+  // Advance the current level (initialise if first time seen)
+  if (state[ilvl] === null) {
+    const l = levels[ilvl];
+    state[ilvl] = l ? l.start - 1 : 0;
   }
   state[ilvl]++;
+
+  // Reset child levels to null so they re-initialise fresh next time
   for (let i = ilvl + 1; i < state.length; i++) {
-    const l = levels[i];
-    state[i] = l ? l.start - 1 : 0;
+    state[i] = null;
   }
 
   const text = level.lvlText.replace(/%(\d+)/g, (_, n) => {
     const idx = +n - 1;
     const l = levels[idx];
-    return fmtNum(state[idx] ?? 0, l ? l.numFmt : 'decimal');
+    const val = state[idx] ?? (l ? l.start : 1);
+    return fmtNum(val, l ? l.numFmt : 'decimal');
   });
   return text || null;
 }
