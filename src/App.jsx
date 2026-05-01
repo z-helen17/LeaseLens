@@ -1,5 +1,5 @@
 import { useState, useEffect } from 'react';
-import { buildDocumentGrid, findClauseNumber, findRowByText } from './utils/buildDocumentGrid.js';
+import { buildDocumentGrid, buildClausePackets } from './utils/buildDocumentGrid.js';
 import PasswordGate from './components/PasswordGate.jsx';
 import UploadScreen from './components/UploadScreen.jsx';
 import LoadingScreen from './components/LoadingScreen.jsx';
@@ -35,6 +35,7 @@ export default function App() {
   const [option, setOption] = useState(null);
   const [error, setError] = useState(null);
   const [grid, setGrid] = useState(null);
+  const [packets, setPackets] = useState(null);
 
   const handleUpload = (data) => {
     setUploadData(data);
@@ -52,15 +53,18 @@ export default function App() {
     setDetectedJurisdiction(detected);
 
     let newGrid = null;
+    let newPackets = null;
     if (uploadData.file.name.toLowerCase().endsWith('.docx')) {
       try {
         const ab = await uploadData.file.arrayBuffer();
         newGrid = await buildDocumentGrid(ab);
+        newPackets = buildClausePackets(newGrid);
       } catch {
         // Grid build failure is non-fatal; proceed without grid
       }
     }
     setGrid(newGrid);
+    setPackets(newPackets);
 
     if (jurisdictionsMatch(detected, uploadData?.location)) {
       setConfirmedJurisdiction(detected || uploadData?.location || '');
@@ -76,18 +80,7 @@ export default function App() {
   };
 
   const handleAnalysisComplete = (result) => {
-    const processedClauses = result.map(clause => {
-      const alreadyNumbered = /^(\d|Article|Section|Clause|Schedule|Annex|Exhibit|Appendix)/i.test(clause.name?.trim() || '');
-      if (alreadyNumbered) return clause;
-      if (!grid || !clause.verbatimExtract) return clause;
-      const rowMatch = findRowByText(grid, clause.verbatimExtract);
-      if (!rowMatch) return clause;
-      const effectiveCellRef = clause.cellRef || rowMatch.ref;
-      const clauseNumber = findClauseNumber(grid, effectiveCellRef);
-      if (!clauseNumber) return clause;
-      return { ...clause, name: `${clauseNumber} — ${clause.name}`, cellRef: effectiveCellRef };
-    });
-    setClauses(processedClauses);
+    setClauses(result);
     setScreen('options');
   };
 
@@ -111,6 +104,7 @@ export default function App() {
     setOption(null);
     setError(null);
     setGrid(null);
+    setPackets(null);
   };
 
   const handleBackToOptions = () => {
@@ -154,6 +148,7 @@ export default function App() {
         extractedText={extractedText}
         confirmedJurisdiction={confirmedJurisdiction}
         grid={grid}
+        packets={packets}
         onComplete={handleAnalysisComplete}
         onError={handleAnalysisError}
         onLogoClick={handleStartOver}

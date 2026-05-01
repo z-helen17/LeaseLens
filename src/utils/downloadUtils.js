@@ -333,7 +333,7 @@ function anchorByCellRef(docXml, cellRef, commentId) {
 // If neither strategy finds a qualifying paragraph, returns matched:false with no anchor.
 // debugIdx: 0-based clause index; pass for first 5 clauses to enable diagnostic output.
 // Returns { xml: string, matched: boolean, via: 'cellRef'|'string'|null }.
-function injectCommentMarkers(xml, clauseName, commentId, verbatimExtract, debugIdx, cellRef) {
+function injectCommentMarkers(xml, clauseName, commentId, verbatimExtract, debugIdx, cellRef, numberRef) {
   const startTag = `<w:commentRangeStart w:id="${commentId}"/>`;
   const endTag   = `<w:commentRangeEnd w:id="${commentId}"/>`;
   const refRun   =
@@ -347,7 +347,31 @@ function injectCommentMarkers(xml, clauseName, commentId, verbatimExtract, debug
       console.log(`[LeaseLens] ✓ #${commentId} via cellRef "${cellRef}"`);
       return { xml: anchored, matched: true, via: 'cellRef' };
     }
-    console.warn(`[LeaseLens] cellRef "${cellRef}" failed — falling back to string search`);
+    console.warn(`[LeaseLens] cellRef "${cellRef}" failed — falling back`);
+  }
+
+  // Strategy 0b — numberRef cell coordinate anchor (fallback when text cell anchor fails)
+  if (typeof numberRef === 'string') {
+    const anchored = anchorByCellRef(xml, numberRef, commentId);
+    if (anchored !== null) {
+      console.log(`[LeaseLens] ✓ #${commentId} via numberRef cell "${numberRef}"`);
+      return { xml: anchored, matched: true, via: 'cellRef' };
+    }
+    console.warn(`[LeaseLens] numberRef cell "${numberRef}" failed — falling back to string search`);
+  }
+
+  // Strategy 0c — numberRef paragraph anchor (for paragraph-scoped numberRef objects)
+  if (numberRef?.type === 'paragraph') {
+    const paras = buildParaMap(xml);
+    const bodyParas = paras.filter(p => !isParaInTableCell(xml, p.start));
+    const target = typeof numberRef.index === 'number' ? bodyParas[numberRef.index] : null;
+    if (target) {
+      const newXml = injectIntoParaEntry(xml, target, startTag, endTag, refRun);
+      if (newXml !== null) {
+        console.log(`[LeaseLens] ✓ #${commentId} via numberRef paragraph[${numberRef.index}]`);
+        return { xml: newXml, matched: true, via: 'cellRef' };
+      }
+    }
   }
 
   const paras = buildParaMap(xml);
@@ -569,7 +593,7 @@ async function downloadAnnotatedDocx(filteredClauses, file) {
 
     clausesWithChanges.forEach((clause, idx) => {
       const commentId = idBase + idx;
-      const result = injectCommentMarkers(docXml, clause.name, commentId, clause.verbatimExtract, idx < 5 ? idx : undefined, clause.cellRef);
+      const result = injectCommentMarkers(docXml, clause.name, commentId, clause.verbatimExtract, idx < 5 ? idx : undefined, clause.cellRef, clause.numberRef);
 
       if (result.matched) {
         docXml = result.xml;

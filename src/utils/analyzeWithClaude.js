@@ -10,6 +10,10 @@ Be concise: keep each "note" field to a maximum of 2 sentences, and each "change
 If the document is bilingual or contains text in multiple languages, analyse the English text only and propose changes in English only. Do not propose rewrites in other languages. The only exception is where there is a direct inconsistency between the two language versions (e.g. different numbers, names or defined terms) — in that case flag it as an 'x' drafting error and note the inconsistency clearly.
 Your entire response must be valid JSON only. Do not include markdown backticks, code fences, or any text outside the JSON array. All string values must use only standard ASCII apostrophes and quotation marks. Do not use curly quotes, special dashes, or non-ASCII punctuation inside JSON strings. If you need to include a quote inside a string value, escape it with a backslash.
 The document has been pre-processed into a grid. Table cells are identified by coordinates in the format t{tableIndex}r{rowIndex}c{colIndex}. When you identify a clause in a table cell, record its exact grid coordinate as cellRef. This coordinate will be used to anchor comments in the Word document — it must be precise. For clauses in free-flowing body text outside tables, set cellRef to null. When identifying cellRef, always choose the cell with the substantive clause text. Number cells (short, containing only digits or clause references) and translation cells (containing non-English text) must never be used as cellRef.
+Each clause packet is prefixed with a label like [CLAUSE 4.1 | textRef:t4r12c1 | numberRef:t4r5c0]. Use these labels to identify clause numbers and anchor coordinates:
+- textRef is the grid coordinate of the cell containing the clause text — use it as cellRef
+- numberRef is the coordinate where the clause number appears — echo it exactly as numberRef
+- If a packet has [CLAUSE UNKNOWN | textRef:...], use the textRef as cellRef and set numberRef to null
 Return ONLY a valid JSON array with no other text, markdown or backticks. Each element must have these exact fields:
 
 name: string — CRITICAL RULE: You MUST prefix every clause name with its clause number exactly as it appears in the document. Format: "6.3 — Clause Name" or "6.3.1 — Clause Name". If a provision is in a schedule, prefix with the schedule reference e.g. "Schedule 2 — Clause Name". Never return a clause name without its document reference number. If a clause genuinely has no number or schedule reference, use the section heading as-is.
@@ -19,8 +23,8 @@ note: string (explanation of why this clause leans this way, referencing jurisdi
 change: string or null (precise word-level change needed — what to replace with what. No style suggestions. Null for neutral clauses.)
 genClause: string or null (full drafted replacement clause text using the agreement's own definitions and language, only when the change requires a new mechanism. Null otherwise.)
 lenderFlag: boolean (true if this clause is relevant to a landlord's lender)
-verbatimExtract: string — exactly 10-15 consecutive words copied verbatim from the body text of this clause (not the heading, not paraphrased — exact words as they appear in the document, used to locate the clause in the source file)
-cellRef: the grid coordinate of the cell containing the CLAUSE TEXT — not the clause number cell. In bilingual documents with a number column and a text column, cellRef must point to the English text cell (the cell with the longest English text content in that row), never the number cell or the Romanian translation cell. Format: 't{n}r{n}c{n}'. Output null for body paragraphs.`;
+cellRef: string | null — echo the textRef value from the clause label exactly. For body paragraphs outside tables (no label), set null.
+numberRef: string | null — echo the numberRef value from the clause label exactly. If the label had no numberRef (UNKNOWN packets), set null.`;
 
 const SYSTEM_PROMPT_CHUNK = `You are a commercial real estate lawyer analysing lease agreement clauses for bias. You will be given a portion of a lease. Analyse ONLY the clauses present in this portion and return your results immediately — do NOT wait for additional parts, do NOT ask for more context, do NOT say the document is incomplete.
 
@@ -30,6 +34,10 @@ Be concise: keep each "note" field to a maximum of 2 sentences, and each "change
 If the document is bilingual or contains text in multiple languages, analyse the English text only and propose changes in English only. Do not propose rewrites in other languages. The only exception is where there is a direct inconsistency between the two language versions (e.g. different numbers, names or defined terms) — in that case flag it as an 'x' drafting error and note the inconsistency clearly.
 Your entire response must be valid JSON only. Do not include markdown backticks, code fences, or any text outside the JSON array. All string values must use only standard ASCII apostrophes and quotation marks. Do not use curly quotes, special dashes, or non-ASCII punctuation inside JSON strings. If you need to include a quote inside a string value, escape it with a backslash.
 The document has been pre-processed into a grid. Table cells are identified by coordinates in the format t{tableIndex}r{rowIndex}c{colIndex}. When you identify a clause in a table cell, record its exact grid coordinate as cellRef. This coordinate will be used to anchor comments in the Word document — it must be precise. For clauses in free-flowing body text outside tables, set cellRef to null. When identifying cellRef, always choose the cell with the substantive clause text. Number cells (short, containing only digits or clause references) and translation cells (containing non-English text) must never be used as cellRef.
+Each clause packet is prefixed with a label like [CLAUSE 4.1 | textRef:t4r12c1 | numberRef:t4r5c0]. Use these labels to identify clause numbers and anchor coordinates:
+- textRef is the grid coordinate of the cell containing the clause text — use it as cellRef
+- numberRef is the coordinate where the clause number appears — echo it exactly as numberRef
+- If a packet has [CLAUSE UNKNOWN | textRef:...], use the textRef as cellRef and set numberRef to null
 Return ONLY a valid JSON array with no other text, markdown or backticks. Each element must have these exact fields:
 
 name: string — CRITICAL RULE: You MUST prefix every clause name with its clause number exactly as it appears in the document. Format: "6.3 — Clause Name" or "6.3.1 — Clause Name". If a provision is in a schedule, prefix with the schedule reference e.g. "Schedule 2 — Clause Name". Never return a clause name without its document reference number. If a clause genuinely has no number or schedule reference, use the section heading as-is.
@@ -39,8 +47,8 @@ note: string (explanation of why this clause leans this way, referencing jurisdi
 change: string or null (precise word-level change needed — what to replace with what. No style suggestions. Null for neutral clauses.)
 genClause: string or null (full drafted replacement clause text using the agreement's own definitions and language, only when the change requires a new mechanism. Null otherwise.)
 lenderFlag: boolean (true if this clause is relevant to a landlord's lender)
-verbatimExtract: string — exactly 10-15 consecutive words copied verbatim from the body text of this clause (not the heading, not paraphrased — exact words as they appear in the document, used to locate the clause in the source file)
-cellRef: the grid coordinate of the cell containing the CLAUSE TEXT — not the clause number cell. In bilingual documents with a number column and a text column, cellRef must point to the English text cell (the cell with the longest English text content in that row), never the number cell or the Romanian translation cell. Format: 't{n}r{n}c{n}'. Output null for body paragraphs.`;
+cellRef: string | null — echo the textRef value from the clause label exactly. For body paragraphs outside tables (no label), set null.
+numberRef: string | null — echo the numberRef value from the clause label exactly. If the label had no numberRef (UNKNOWN packets), set null.`;
 
 function getJurisdictionContext(location) {
   if (!location) return '';
@@ -107,6 +115,41 @@ export async function detectJurisdiction(text) {
 }
 
 const CHUNK_SIZE = 30000;
+
+function buildPacketText(packets) {
+  return packets.map(p => {
+    const label = p.number
+      ? `[CLAUSE ${p.number} | textRef:${p.textRef} | numberRef:${JSON.stringify(p.numberRef)}]`
+      : `[CLAUSE UNKNOWN | textRef:${p.textRef}]`;
+    return `${label}\n${p.text}`;
+  }).join('\n\n');
+}
+
+function splitPacketsIntoChunks(packets) {
+  const chunks = [];
+  let current = [];
+  let currentLen = 0;
+
+  for (const p of packets) {
+    const label = p.number
+      ? `[CLAUSE ${p.number} | textRef:${p.textRef} | numberRef:${JSON.stringify(p.numberRef)}]`
+      : `[CLAUSE UNKNOWN | textRef:${p.textRef}]`;
+    const entry = `${label}\n${p.text}`;
+    const entryLen = entry.length + (current.length > 0 ? 2 : 0); // +2 for '\n\n' joiner
+
+    if (current.length > 0 && currentLen + entryLen > CHUNK_SIZE) {
+      chunks.push(current);
+      current = [p];
+      currentLen = entry.length;
+    } else {
+      current.push(p);
+      currentLen += entryLen;
+    }
+  }
+
+  if (current.length > 0) chunks.push(current);
+  return chunks;
+}
 
 function splitIntoChunks(text) {
   if (text.length <= CHUNK_SIZE) return [text];
@@ -284,8 +327,9 @@ function buildGridSummary(grid) {
 
 // onProgress(currentChunkNumber, totalChunks) — called before each API call (1-indexed)
 // onClause(clause) — called each time a complete clause object is parsed mid-stream
-export async function analyzeWithClaude(text, location, onProgress = () => {}, onClause = () => {}, grid = null) {
-  const cacheKey = hashText(text);
+export async function analyzeWithClaude(text, location, onProgress = () => {}, onClause = () => {}, grid = null, packets = null) {
+  const usePackets = packets && packets.length > 0;
+  const cacheKey = usePackets ? hashText(buildPacketText(packets)) : hashText(text);
   try {
     const cached = localStorage.getItem(cacheKey);
     if (cached) {
@@ -293,7 +337,7 @@ export async function analyzeWithClaude(text, location, onProgress = () => {}, o
     }
   } catch (_) {}
 
-  const chunks = splitIntoChunks(text);
+  const chunks = usePackets ? splitPacketsIntoChunks(packets).map(buildPacketText) : splitIntoChunks(text);
   const totalChunks = chunks.length;
   const allClauses = [];
 
@@ -314,7 +358,7 @@ export async function analyzeWithClaude(text, location, onProgress = () => {}, o
     let streamBuffer = '';
 
     let gridSuffix = '';
-    if (grid && i === 0) {
+    if (grid && i === 0 && !usePackets) {
       const gridSummary = buildGridSummary(grid);
       console.log('[grid] grid object tables count:', grid?.tables?.length, 'total rows:', grid?.tables?.reduce((a, t) => a + t.rows.length, 0));
       console.log('[grid] summary length:', gridSummary.length, 'first 200 chars:', gridSummary.slice(0, 200));
