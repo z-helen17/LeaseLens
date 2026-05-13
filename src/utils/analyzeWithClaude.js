@@ -260,11 +260,13 @@ function hashText(text) {
   return 'll_cache_' + hash;
 }
 
-async function streamAnalyzeAPI(system, messages, onToken) {
+async function streamAnalyzeAPI(system, messages, onToken, demoToken) {
+  const body = { system, messages, maxTokens: 32000 };
+  if (demoToken) body.demo_token = demoToken;
   const response = await fetch('/api/analyze', {
     method: 'POST',
     headers: { 'Content-Type': 'application/json' },
-    body: JSON.stringify({ system, messages, maxTokens: 32000 })
+    body: JSON.stringify(body),
   });
 
   if (!response.ok) throw new Error(`API error: ${response.status}`);
@@ -329,7 +331,7 @@ function buildGridSummary(grid) {
 
 // onProgress(currentChunkNumber, totalChunks) — called before each API call (1-indexed)
 // onClause(clause) — called each time a complete clause object is parsed mid-stream
-export async function analyzeWithClaude(text, location, onProgress = () => {}, onClause = () => {}, grid = null, packets = null) {
+export async function analyzeWithClaude(text, location, onProgress = () => {}, onClause = () => {}, grid = null, packets = null, demoToken = null) {
   const usePackets = packets && packets.length > 0;
   const cacheKey = usePackets ? hashText(buildPacketText(packets)) : hashText(text);
   try {
@@ -399,7 +401,7 @@ export async function analyzeWithClaude(text, location, onProgress = () => {}, o
         }
       }
       if (consumed > 0) streamBuffer = streamBuffer.slice(consumed);
-    });
+    }, demoToken);
   });
 
   const results = await Promise.allSettled(chunkPromises);

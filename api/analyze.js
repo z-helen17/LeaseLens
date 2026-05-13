@@ -1,4 +1,5 @@
 import Anthropic from '@anthropic-ai/sdk';
+import { createClient } from '@supabase/supabase-js';
 
 export default async function handler(req, res) {
   if (req.method !== 'POST') {
@@ -6,7 +7,7 @@ export default async function handler(req, res) {
   }
 
   try {
-    const { system, messages, maxTokens, model } = req.body;
+    const { system, messages, maxTokens, model, demo_token } = req.body;
 
     const client = new Anthropic({ apiKey: process.env.ANTHROPIC_API_KEY });
 
@@ -29,6 +30,19 @@ export default async function handler(req, res) {
 
     await stream.finalMessage();
     res.write('data: [DONE]\n\n');
+
+    if (demo_token) {
+      try {
+        const supabase = createClient(
+          process.env.SUPABASE_URL,
+          process.env.SUPABASE_SERVICE_KEY
+        );
+        await supabase.from('demo_tokens').update({ used: true }).eq('token', demo_token);
+      } catch (e) {
+        console.error('Failed to mark demo token used:', e);
+      }
+    }
+
     res.end();
 
   } catch (error) {

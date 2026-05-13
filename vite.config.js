@@ -6,9 +6,4 @@ export default defineConfig({
   optimizeDeps: {
     exclude: ['pdfjs-dist'],
   },
-  server: {
-    proxy: {
-      '/api': 'http://localhost:3001',
-    },
-  },
 });
