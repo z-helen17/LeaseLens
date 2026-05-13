@@ -54,6 +54,8 @@ export default async function handler(req, res) {
   const from = process.env.RESEND_FROM_EMAIL || 'LeaseLens <noreply@the-lease-lens.vercel.app>';
 
   const resend = new Resend(process.env.RESEND_API_KEY);
+  console.log('[approve-access] token row:', JSON.stringify(row));
+  console.log('[approve-access] sending magic link — to:', row.email, '| from:', from);
   await resend.emails.send({
     from,
     to: row.email,
