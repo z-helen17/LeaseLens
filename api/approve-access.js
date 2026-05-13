@@ -39,14 +39,23 @@ export default async function handler(req, res) {
 
   const expiresAt = new Date(Date.now() + 7 * 24 * 60 * 60 * 1000).toISOString();
 
-  const { error: updateError } = await supabase
+  const { data: updatedRow, error: updateError } = await supabase
     .from('demo_tokens')
     .update({ approved: true, expires_at: expiresAt })
-    .eq('token', token);
+    .eq('token', token)
+    .select()
+    .single();
+
+  console.log('[approve-access] update result — error:', updateError, '| row:', JSON.stringify(updatedRow));
 
   if (updateError) {
     console.error('Supabase update error:', updateError);
     return res.status(500).send('<p>Failed to approve token</p>');
+  }
+
+  if (!updatedRow || !updatedRow.approved) {
+    console.error('Supabase update did not apply — row unchanged');
+    return res.status(500).send('<p>Update did not apply — check RLS policies and service role key</p>');
   }
 
   const appUrl = process.env.VITE_APP_URL || 'https://the-lease-lens.vercel.app';
